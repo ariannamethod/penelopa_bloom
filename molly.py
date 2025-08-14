@@ -3,6 +3,7 @@ import os
 import random
 import re
 import sqlite3
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,29 +34,34 @@ def load_user_lines() -> list[str]:
 
 def init_db() -> None:
     """Ensure the SQLite database exists."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        '''
-        CREATE TABLE IF NOT EXISTS lines (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            line TEXT,
-            created_at TEXT
-        )
-        '''
-    )
-    conn.commit()
-    conn.close()
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS lines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    line TEXT,
+                    created_at TEXT
+                )
+                '''
+            )
+            conn.commit()
+    except Exception:
+        logging.exception("Failed to initialize lines database")
 
 
 def store_line(line: str) -> None:
     """Persist a line to the database and the log file."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        'INSERT INTO lines (line, created_at) VALUES (?, ?)',
-        (line, datetime.now(UTC).isoformat()),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                'INSERT INTO lines (line, created_at) VALUES (?, ?)',
+                (line, datetime.now(UTC).isoformat()),
+            )
+            conn.commit()
+    except Exception:
+        logging.exception("Failed to store line")
+        return
     with LINES_FILE.open('a', encoding='utf-8') as f:
         f.write(line + '\n')
 
