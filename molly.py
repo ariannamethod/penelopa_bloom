@@ -123,10 +123,29 @@ class ChatState:
     next_prefix: str | None = None
     messages_since_pause: int = 0
     pause_target: int = field(default_factory=lambda: random.randint(6, 8))
+    last_activity: datetime = field(
+        default_factory=lambda: datetime.now(UTC)
+    )
 
 
 chat_states: dict[int, ChatState] = {}
 user_lines: list[str] = load_user_lines()
+
+CLEANUP_INTERVAL = 60
+STALE_AFTER = 3600
+
+
+async def cleanup_chat_states() -> None:
+    while True:
+        now = datetime.now(UTC)
+        stale = [
+            chat_id
+            for chat_id, state in list(chat_states.items())
+            if (now - state.last_activity).total_seconds() > STALE_AFTER
+        ]
+        for chat_id in stale:
+            del chat_states[chat_id]
+        await asyncio.sleep(CLEANUP_INTERVAL)
 
 
 async def monologue(app: Application, chat_id: int) -> None:
@@ -189,6 +208,7 @@ async def handle_message(
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
     state.next_prefix = random.choice(lines)
+    state.last_activity = datetime.now(UTC)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -196,13 +216,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat_id not in chat_states:
         chat_states[chat_id] = ChatState()
         asyncio.create_task(monologue(context.application, chat_id))
+    chat_states[chat_id].last_activity = datetime.now(UTC)
     await update.message.reply_text('Molly starts whispering...')
 
 
 def main() -> None:
     token = os.environ['TELEGRAM_TOKEN']
     init_db()
-    app = Application.builder().token(token).build()
+    async def post_init(app: Application) -> None:
+        asyncio.create_task(cleanup_chat_states())
+
+    app = Application.builder().token(token).post_init(post_init).build()
     app.add_handler(CommandHandler('start', start))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
