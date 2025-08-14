@@ -18,6 +18,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from dotenv import load_dotenv
 
 ORIGIN_TEXT = Path('origin/molly.md')
 LINES_FILE = Path('origin/logs/lines.txt')
@@ -221,7 +222,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def main() -> None:
-    token = os.environ['TELEGRAM_TOKEN']
+    load_dotenv()
+    token = os.environ.get('TELEGRAM_TOKEN')
+    if not token:
+        raise RuntimeError(
+            'TELEGRAM_TOKEN is not set. Provide your bot token via the TELEGRAM_TOKEN environment variable or a .env file.'
+        )
     init_db()
     async def post_init(app: Application) -> None:
         asyncio.create_task(cleanup_chat_states())
