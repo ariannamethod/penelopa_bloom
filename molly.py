@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 import random
 import re
@@ -21,14 +22,20 @@ from telegram.ext import (
 ORIGIN_TEXT = Path('origin/molly.md')
 LINES_FILE = Path('origin/logs/lines.txt')
 DB_PATH = Path('origin/logs/lines.db')
+HASH_LINES = os.environ.get('MOLLY_HASH_LINES', '0').lower() in {'1', 'true', 'yes'}
+
+
+def sanitize_line(line: str) -> str:
+    """Normalize user input by stripping non-word characters."""
+    return re.sub(r'[^\w\s]', '', line).strip()
 
 
 def load_user_lines() -> list[str]:
     """Return previously stored user lines."""
-    if not LINES_FILE.exists():
+    if HASH_LINES or not LINES_FILE.exists():
         return []
     with LINES_FILE.open('r', encoding='utf-8') as f:
-        return [line.strip() for line in f if line.strip()]
+        return [sanitize_line(line) for line in f if sanitize_line(line)]
 
 
 def init_db() -> None:
@@ -49,15 +56,18 @@ def init_db() -> None:
 
 def store_line(line: str) -> None:
     """Persist a line to the database and the log file."""
+    to_store = (
+        hashlib.sha256(line.encode()).hexdigest() if HASH_LINES else line
+    )
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         'INSERT INTO lines (line, created_at) VALUES (?, ?)',
-        (line, datetime.now(UTC).isoformat()),
+        (to_store, datetime.now(UTC).isoformat()),
     )
     conn.commit()
     conn.close()
     with LINES_FILE.open('a', encoding='utf-8') as f:
-        f.write(line + '\n')
+        f.write(to_store + '\n')
 
 
 def text_chunks() -> Iterator[str]:
@@ -130,7 +140,7 @@ async def _chunk_stream(state: ChatState):
 
 def prepare_lines(text: str) -> list[str]:
     sentences = re.split(r'[.!?]+', text)
-    cleaned = [re.sub(r'[^\w\s]', '', s).strip() for s in sentences]
+    cleaned = [sanitize_line(s) for s in sentences]
     cleaned = [c for c in cleaned if c]
     if not cleaned:
         return []
@@ -151,12 +161,19 @@ async def handle_message(
     lines = prepare_lines(text)
     if not lines:
         return
+    cleaned_lines = []
     for line in lines:
-        store_line(line)
-        user_lines.append(line)
+        clean = sanitize_line(line)
+        if not clean:
+            continue
+        store_line(clean)
+        user_lines.append(clean)
+        cleaned_lines.append(clean)
+    if not cleaned_lines:
+        return
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
-    state.next_prefix = random.choice(lines)
+    state.next_prefix = random.choice(cleaned_lines)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
