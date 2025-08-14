@@ -1,4 +1,4 @@
-# Penelope is an experimental project paying homage to James Joyce's Ulysses.
+# PENELOPE is an experimental project paying homage to James Joyce's Ulysses.
 
 In this repository, Penelope, also called Molly or Molly Bloom, becomes a digital echo of Joycean style.
 
