@@ -7,7 +7,7 @@ import logging
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Iterator
 import hashlib
@@ -38,6 +38,7 @@ DB_PATH = Path('origin/logs/lines.db')
 MAX_USER_LINES = 1000
 CHANGELOG_DB = 'penelopa.db'
 THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
+MAX_MESSAGE_LENGTH = 4096
 
 # Global connection to be shared across threads
 db_conn: sqlite3.Connection | None = None
@@ -178,36 +179,26 @@ def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
 
 
 def text_chunks() -> Iterator[str]:
-    """Yield chunks from Molly's monologue without loading it entirely."""
+    """Yield chunks up to Telegram's maximum size without splitting words."""
     buffer = ""
     with ORIGIN_TEXT.open("r", encoding="utf-8") as f:
         while True:
-            data = f.read(1024)
+            data = f.read(MAX_MESSAGE_LENGTH - len(buffer))
             if not data:
                 break
             buffer += data
-            while len(buffer) > 1024:
-                split_pos = max(
-                    buffer.rfind(" ", 0, 1024),
-                    buffer.rfind("\n", 0, 1024),
-                )
+            while len(buffer) >= MAX_MESSAGE_LENGTH:
+                split_pos = buffer.rfind(" ", 0, MAX_MESSAGE_LENGTH)
                 if split_pos == -1:
-                    # No whitespace in the first chunk, search entire buffer
-                    split_pos = max(
-                        buffer.rfind(" "),
-                        buffer.rfind("\n"),
-                    )
+                    split_pos = buffer.find(" ", MAX_MESSAGE_LENGTH)
                     if split_pos == -1:
                         break
-                chunk, buffer = (
-                    buffer[:split_pos].strip(),
-                    buffer[split_pos + 1:],
-                )
+                chunk, buffer = buffer[:split_pos], buffer[split_pos + 1:]
                 if chunk:
                     yield chunk
-    remainder = buffer.strip()
-    if remainder:
-        yield remainder
+        remainder = buffer.strip()
+        if remainder:
+            yield remainder
 
 
 async def simulate_typing(bot, chat_id: int, delay: int) -> None:
@@ -229,6 +220,12 @@ class ChatState:
     last_activity: datetime = field(
         default_factory=lambda: datetime.now(UTC)
     )
+    daily_target: int = field(default_factory=lambda: random.randint(4, 7))
+    messages_today: int = 0
+    last_reset: datetime = field(default_factory=lambda: datetime.now(UTC))
+    next_delay: float = 3600.0
+    message_task: asyncio.Task | None = None
+    awaiting_response: bool = False
 
 
 chat_states: dict[int, ChatState] = {}
@@ -236,6 +233,59 @@ user_lines, user_weights = load_user_lines()
 
 CLEANUP_INTERVAL = 60
 STALE_AFTER = 3600
+
+
+def compute_delay(state: ChatState, entropy: float, perplexity: float) -> float:
+    base_interval = 86400 / state.daily_target
+    entropy_factor = 1 + (10 - min(entropy, 10)) / 10
+    perplexity_factor = 1 + 1 / (perplexity + 1)
+    return base_interval * entropy_factor * perplexity_factor * random.uniform(0.5, 1.5)
+
+
+async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
+    chunk = next(state.generator)
+    prefix = None
+    if state.next_prefix:
+        prefix = state.next_prefix
+        state.next_prefix = None
+    elif user_lines and random.random() < 0.5:
+        prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
+    if prefix:
+        chunk = f"{prefix} {chunk}"
+    entropy, perplexity, _ = compute_metrics(chunk)
+    store_line(chunk)
+    delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
+    await simulate_typing(app.bot, chat_id, delay)
+    state.awaiting_response = False
+    await app.bot.send_message(chat_id=chat_id, text=chunk)
+    now = datetime.now(UTC)
+    if state.last_reset.date() != now.date():
+        state.last_reset = now
+        state.messages_today = 0
+        state.daily_target = random.randint(4, 7)
+    state.messages_today += 1
+    if state.messages_today >= state.daily_target:
+        tomorrow = datetime.combine((now + timedelta(days=1)).date(), time.min, tzinfo=UTC)
+        state.next_delay = (tomorrow - now).total_seconds()
+    else:
+        state.next_delay = compute_delay(state, entropy, perplexity)
+    schedule_next_message(app, chat_id, state)
+
+
+async def _delayed_message(app: Application, chat_id: int, state: ChatState, delay: float) -> None:
+    try:
+        await asyncio.sleep(delay)
+        await send_chunk(app, chat_id, state)
+    except asyncio.CancelledError:
+        pass
+
+
+def schedule_next_message(app: Application, chat_id: int, state: ChatState, delay: float | None = None) -> None:
+    if delay is None:
+        delay = state.next_delay
+    if state.message_task:
+        state.message_task.cancel()
+    state.message_task = asyncio.create_task(_delayed_message(app, chat_id, state, delay))
 
 
 async def cleanup_chat_states() -> None:
@@ -259,32 +309,7 @@ async def close_db(app: Application) -> None:
 
 async def monologue(app: Application, chat_id: int) -> None:
     state = chat_states.setdefault(chat_id, ChatState())
-    async for chunk in _chunk_stream(state):
-        delay = random.randint(5, 50)
-        if random.random() < 0.1:
-            delay = random.randint(120, 180)
-        await simulate_typing(app.bot, chat_id, delay)
-        await app.bot.send_message(chat_id=chat_id, text=chunk)
-        state.messages_since_pause += 1
-        if (
-            state.messages_since_pause >= state.pause_target
-            and random.random() < 0.3
-        ):
-            await asyncio.sleep(random.randint(3600, 7200))
-            state.messages_since_pause = 0
-            state.pause_target = random.randint(6, 8)
-
-
-async def _chunk_stream(state: ChatState):
-    for chunk in state.generator:
-        prefix = None
-        if state.next_prefix:
-            prefix = state.next_prefix
-            state.next_prefix = None
-        elif user_lines and random.random() < 0.5:
-            prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
-        yield f"{prefix} {chunk}" if prefix else chunk
-        await asyncio.sleep(0)
+    schedule_next_message(app, chat_id, state)
 
 
 def prepare_lines(text: str) -> list[str]:
@@ -319,6 +344,8 @@ async def handle_message(
     else:
         state.next_prefix = random.choice(lines)
     state.last_activity = datetime.now(UTC)
+    state.awaiting_response = True
+    schedule_next_message(context.application, chat_id, state, delay=random.randint(3, 6))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -342,6 +369,7 @@ def main() -> None:
 
     async def post_init(app: Application) -> None:
         asyncio.create_task(cleanup_chat_states())
+        asyncio.create_task(monitor_repo())
 
     app = (
         Application.builder()
@@ -398,6 +426,33 @@ def init_change_db(conn: sqlite3.Connection) -> None:
         conn.commit()
     except Exception:
         logging.exception("Failed to initialize database")
+
+
+async def monitor_repo() -> None:
+    prev_commit = ""
+    conn = sqlite3.connect(CHANGELOG_DB)
+    init_change_db(conn)
+    while True:
+        try:
+            current_commit = get_current_commit()
+            if prev_commit and current_commit != prev_commit:
+                diff = get_diff(prev_commit, current_commit)
+                repo_hash = repo_sha256(current_commit)
+                conn.execute(
+                    "INSERT INTO changes (commit_hash, repo_hash, diff, size, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        current_commit,
+                        repo_hash,
+                        diff,
+                        len(diff.encode('utf-8')),
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+                conn.commit()
+            prev_commit = current_commit
+        except Exception:
+            logging.exception("Failed to monitor repository changes")
+        await asyncio.sleep(300)
 
 
 def get_last_commit(conn: sqlite3.Connection) -> str | None:
