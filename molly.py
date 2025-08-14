@@ -19,8 +19,9 @@ from telegram.ext import (
 )
 
 ORIGIN_TEXT = Path('origin/molly.md')
-LINES_FILE = Path('origin/logs/lines.txt')
-DB_PATH = Path('origin/logs/lines.db')
+LOG_DIR = Path('logs')
+LINES_FILE = LOG_DIR / 'lines.txt'
+DB_PATH = LOG_DIR / 'lines.db'
 
 
 def load_user_lines() -> list[str]:
@@ -32,7 +33,9 @@ def load_user_lines() -> list[str]:
 
 
 def init_db() -> None:
-    """Ensure the SQLite database exists."""
+    """Ensure the log directory and SQLite database exist."""
+    LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    LOG_DIR.chmod(0o700)
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         '''
