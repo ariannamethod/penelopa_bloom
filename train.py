@@ -18,6 +18,7 @@ import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+from torch.utils.data import Dataset, DataLoader
 
 from model import GPTConfig, GPT
 from configurator import update_config
@@ -84,16 +85,50 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# poor man's data loader, TODO evaluate need for actual DataLoader
 data_dir = os.path.join('data', dataset)
-train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+
+
+class BinDataset(Dataset):
+    def __init__(self, data_path, block_size):
+        self.data = np.memmap(data_path, dtype=np.uint16, mode='r')
+        self.block_size = block_size
+
+    def __len__(self):
+        return len(self.data) - self.block_size
+
+    def __getitem__(self, idx):
+        x = torch.from_numpy(self.data[idx:idx + self.block_size].astype(np.int64))
+        y = torch.from_numpy(self.data[idx + 1:idx + 1 + self.block_size].astype(np.int64))
+        return x, y
+
+
+train_dataset = BinDataset(os.path.join(data_dir, 'train.bin'), block_size)
+val_dataset = BinDataset(os.path.join(data_dir, 'val.bin'), block_size)
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=2)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=2)
+
+train_iter = iter(train_loader)
+val_iter = iter(val_loader)
+
+
 def get_batch(split):
-    data = train_data if split == 'train' else val_data
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    x, y = x.to(device), y.to(device)
+    global train_iter, val_iter
+    if split == 'train':
+        loader, data_iter = train_loader, train_iter
+    else:
+        loader, data_iter = val_loader, val_iter
+    try:
+        x, y = next(data_iter)
+    except StopIteration:
+        data_iter = iter(loader)
+        if split == 'train':
+            train_iter = data_iter
+        else:
+            val_iter = data_iter
+        x, y = next(data_iter)
+    x = x.to(device, non_blocking=True)
+    y = y.to(device, non_blocking=True)
     return x, y
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
