@@ -6,6 +6,27 @@ The experiment explores how literature and code can merge into a living dialogue
 
 Penelope's architecture is built around a persistent sensor that tracks perplexity and entropy.
 
+Repository structure:
+
+```
+penelopa_bloom/
+├── AGENTS.md
+├── LICENSE
+├── README.md
+├── assets/
+├── bench.py
+├── config/
+├── configurator.py
+├── data/
+├── model.py
+├── molly.py
+├── origin/
+├── penelopa.py
+├── sample.py
+├── scaling_laws.ipynb
+└── train.py
+```
+
 The sensor is always on and guides Molly's choice of sentences from the stream of user messages.
 
 Every message is parsed for emotional and resonance patterns, registering counts of numeric tokens and subtle tonal cues.
