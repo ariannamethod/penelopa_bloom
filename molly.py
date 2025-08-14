@@ -21,14 +21,21 @@ from telegram.ext import (
 ORIGIN_TEXT = Path('origin/molly.md')
 LINES_FILE = Path('origin/logs/lines.txt')
 DB_PATH = Path('origin/logs/lines.db')
+MAX_USER_LINES = 1000
 
 
 def load_user_lines() -> list[str]:
-    """Return previously stored user lines."""
+    """Return previously stored user lines, trimmed to the last MAX_USER_LINES."""
     if not LINES_FILE.exists():
         return []
     with LINES_FILE.open('r', encoding='utf-8') as f:
-        return [line.strip() for line in f if line.strip()]
+        lines = [line.strip() for line in f if line.strip()]
+    if len(lines) > MAX_USER_LINES:
+        lines = lines[-MAX_USER_LINES:]
+        with LINES_FILE.open('w', encoding='utf-8') as f:
+            for line in lines:
+                f.write(line + '\n')
+    return lines
 
 
 def init_db() -> None:
@@ -58,6 +65,16 @@ def store_line(line: str) -> None:
     conn.close()
     with LINES_FILE.open('a', encoding='utf-8') as f:
         f.write(line + '\n')
+
+
+def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
+    """Trim user_lines and the log file to the last max_lines entries."""
+    if len(user_lines) <= max_lines:
+        return
+    del user_lines[:-max_lines]
+    with LINES_FILE.open('w', encoding='utf-8') as f:
+        for line in user_lines:
+            f.write(line + '\n')
 
 
 def text_chunks() -> Iterator[str]:
@@ -162,6 +179,7 @@ async def handle_message(
     for line in lines:
         store_line(line)
         user_lines.append(line)
+    trim_user_lines()
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
     state.next_prefix = random.choice(lines)
