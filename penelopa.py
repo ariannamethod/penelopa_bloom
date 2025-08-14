@@ -2,8 +2,13 @@ import hashlib
 import os
 import sqlite3
 import subprocess
+import tempfile
+import shutil
 from datetime import UTC, datetime
 import logging
+
+import numpy as np
+import tiktoken
 
 DB_PATH = 'penelopa.db'
 ORIGIN_TEXT = os.path.join('origin', 'molly.md')
@@ -95,13 +100,62 @@ def total_logged_size(conn: sqlite3.Connection) -> int:
 
 
 def fine_tune() -> None:
-    """Trigger fine-tuning on Molly's monologue."""
-    print('Fine-tuning triggered on Molly\'s monologue...')
-    # Placeholder: integrate with nanoGPT training as needed
-    # subprocess.run(
-    #     ['python', 'train.py', '--dataset', ORIGIN_TEXT],
-    #     check=True,
-    # )
+    """Fine-tune model on the original text and accumulated diffs."""
+
+    print("Fine-tuning triggered on Molly's monologue...")
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute('SELECT diff FROM changes ORDER BY id')
+    diffs = [row[0] for row in cur.fetchall()]
+    if not diffs:
+        print('No diffs available for fine-tuning.')
+        conn.close()
+        return
+
+    with open(ORIGIN_TEXT, 'r', encoding='utf-8') as f:
+        base_text = f.read()
+
+    combined_text = base_text + '\n'.join(diffs)
+
+    tmpdir = tempfile.mkdtemp(dir='data')
+    try:
+        input_path = os.path.join(tmpdir, 'input.txt')
+        with open(input_path, 'w', encoding='utf-8') as f:
+            f.write(combined_text)
+
+        enc = tiktoken.get_encoding('gpt2')
+        ids = enc.encode_ordinary(combined_text)
+        n = len(ids)
+        split = int(n * 0.9)
+        train_ids = np.array(ids[:split], dtype=np.uint16)
+        val_ids = np.array(ids[split:], dtype=np.uint16)
+        train_ids.tofile(os.path.join(tmpdir, 'train.bin'))
+        val_ids.tofile(os.path.join(tmpdir, 'val.bin'))
+
+        dataset_name = os.path.basename(tmpdir)
+        subprocess.run(
+            [
+                'python',
+                'train.py',
+                'config/finetune_molly.py',
+                f'--dataset={dataset_name}',
+            ],
+            check=True,
+        )
+
+        os.makedirs(os.path.join('origin', 'logs'), exist_ok=True)
+        archive = os.path.join(
+            'origin', 'logs', f"{datetime.now(UTC).isoformat()}.diff"
+        )
+        with open(archive, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(diffs))
+
+        conn.execute('DELETE FROM changes')
+        conn.commit()
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        conn.close()
 
 
 def main() -> None:
