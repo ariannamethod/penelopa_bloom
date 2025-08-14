@@ -1,12 +1,9 @@
 """
-This training script can be run both on a single gpu in debug mode,
-and also in a larger training run with distributed data parallel (ddp).
+Bloom
+=====
 
-To run in debug mode example:
-$ python train.py --batch_size=32 --other=args
-
-To run DDP on 4 gpus on one node, example:
-$ torchrun --standalone --nproc_per_node=4 train.py
+Training and fine-tuning utilities for the Penelopa model.
+Supports both single-GPU and distributed runs.
 """
 
 import os
@@ -20,8 +17,32 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data import Dataset, DataLoader
 
-from model import GPTConfig, GPT
-from configurator import update_config
+from penelopa import GPTConfig, GPT
+
+
+def _str2bool(v):
+    return v.lower() in {"1", "true", "yes", "y"}
+
+
+def update_config(cfg):
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default=None)
+    for key, value in list(cfg.items()):
+        if key.startswith("_"):
+            continue
+        if isinstance(value, bool):
+            parser.add_argument(f"--{key}", type=_str2bool)
+        elif isinstance(value, int):
+            parser.add_argument(f"--{key}", type=int)
+        elif isinstance(value, float):
+            parser.add_argument(f"--{key}", type=float)
+        elif isinstance(value, str):
+            parser.add_argument(f"--{key}", type=str)
+    args = parser.parse_args()
+    for k, v in vars(args).items():
+        if v is not None and k != "config":
+            cfg[k] = v
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
