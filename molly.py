@@ -21,6 +21,7 @@ from telegram.ext import (
 ORIGIN_TEXT = Path('origin/molly.md')
 LINES_FILE = Path('origin/logs/lines.txt')
 DB_PATH = Path('origin/logs/lines.db')
+MUTED_LOG = Path('origin/logs/muted.txt')
 
 
 def load_user_lines() -> list[str]:
@@ -92,6 +93,7 @@ class ChatState:
     next_prefix: str | None = None
     messages_since_pause: int = 0
     pause_target: int = field(default_factory=lambda: random.randint(6, 8))
+    voice_enabled: bool = True
 
 
 chat_states: dict[int, ChatState] = {}
@@ -101,11 +103,15 @@ user_lines: list[str] = load_user_lines()
 async def monologue(app: Application, chat_id: int) -> None:
     state = chat_states.setdefault(chat_id, ChatState())
     async for chunk in _chunk_stream(state):
-        delay = random.randint(5, 50)
-        if random.random() < 0.1:
-            delay = random.randint(120, 180)
-        await simulate_typing(app.bot, chat_id, delay)
-        await app.bot.send_message(chat_id=chat_id, text=chunk)
+        if state.voice_enabled:
+            delay = random.randint(5, 50)
+            if random.random() < 0.1:
+                delay = random.randint(120, 180)
+            await simulate_typing(app.bot, chat_id, delay)
+            await app.bot.send_message(chat_id=chat_id, text=chunk)
+        else:
+            with MUTED_LOG.open('a', encoding='utf-8') as f:
+                f.write(chunk + '\n')
         state.messages_since_pause += 1
         if (
             state.messages_since_pause >= state.pause_target
@@ -167,11 +173,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text('Molly starts whispering...')
 
 
+async def toggle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    state = chat_states.setdefault(chat_id, ChatState())
+    state.voice_enabled = not state.voice_enabled
+    status = 'enabled' if state.voice_enabled else 'disabled'
+    await update.message.reply_text(f"Voice {status}")
+
+
 def main() -> None:
     token = os.environ['TELEGRAM_TOKEN']
     init_db()
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('voice', toggle_voice))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
