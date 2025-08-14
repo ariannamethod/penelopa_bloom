@@ -93,7 +93,7 @@ def update_config(cfg: Dict[str, Any]) -> None:
         cfg[k] = v
 
 
-from penelopa import GPTConfig, GPT
+from molly import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
