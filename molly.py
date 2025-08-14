@@ -62,18 +62,23 @@ def store_line(line: str) -> None:
 
 def text_chunks() -> Iterator[str]:
     """Yield chunks from Molly's monologue without cutting words."""
-    text = ORIGIN_TEXT.read_text(encoding='utf-8')
-    pos = 0
-    n = len(text)
-    while pos < n:
-        length = random.randint(200, 800)
-        end = min(pos + length, n)
-        while end < n and text[end] not in {' ', '\n'}:
-            end += 1
-        chunk = text[pos:end].strip()
-        pos = end + 1
-        if chunk:
-            yield chunk
+    with ORIGIN_TEXT.open('r', encoding='utf-8') as f:
+        buffer: list[str] = []
+        length = 0
+        target = random.randint(200, 800)
+        for line in f:
+            for word in line.strip().split():
+                prospective = length + (1 if buffer else 0) + len(word)
+                if prospective > target and buffer:
+                    yield " ".join(buffer)
+                    buffer = [word]
+                    length = len(word)
+                    target = random.randint(200, 800)
+                else:
+                    buffer.append(word)
+                    length = prospective
+        if buffer:
+            yield " ".join(buffer)
 
 
 async def simulate_typing(bot, chat_id: int, delay: int) -> None:
