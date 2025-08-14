@@ -6,19 +6,19 @@ The experiment explores how literature and code can merge into a living dialogue
 
 Penelope's architecture is built around a persistent sensor that tracks perplexity and entropy.
 
+Molly never replies directly. She quietly splits each incoming message into phrases, folds them into her own stream of thought, and continues speaking. These internal line breaks remain hidden from the user.
+
 ### Repository structure
 
 ```mermaid
 graph TD
     root((penelopa_bloom))
-    root --> bloom.py
     root --> molly.py
-    root --> penelopa.py
+    root --> ullyses.py
     root --> data[(data/)]
     root --> origin[(origin/)]
     root --> requirements.txt
     root --> Procfile
-    root --> AGENTS.md
     root --> README.md
     root --> LICENSE
 ```
