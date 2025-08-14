@@ -6,9 +6,32 @@ The experiment explores how literature and code can merge into a living dialogue
 
 Penelope's architecture is built around a persistent sensor that tracks perplexity and entropy.
 
-### Repository structure:
+### Repository structure
 
+```mermaid
+graph TD
+    root((penelopa_bloom))
+    root --> bloom.py
+    root --> molly.py
+    root --> penelopa.py
+    root --> data[(data/)]
+    root --> origin[(origin/)]
+    root --> requirements.txt
+    root --> Procfile
+    root --> AGENTS.md
+    root --> README.md
+    root --> LICENSE
 ```
+
+### Technical TL;DR
+
+Penelope listens to every incoming message with a sensor that measures entropy and perplexity, turning language into quantitative signals.
+
+Messages and their metrics are stored in a SQLite database, building a memory of resonance scores that reflect user interactions.
+
+When generating replies, Molly retrieves prefixes from this memory and weights them by perplexity, entropy, and resonance to shape her responses.
+
+Asynchronous Telegram handlers drive a continuous monologue, letting Penelope adapt in real time as the dialogue unfolds.
 
 The sensor is always on and guides Molly's choice of sentences from the stream of user messages.
 
