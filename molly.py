@@ -24,6 +24,9 @@ LINES_FILE = Path('origin/logs/lines.txt')
 DB_PATH = Path('origin/logs/lines.db')
 MAX_USER_LINES = 1000
 
+# Global connection to be shared across threads
+db_conn: sqlite3.Connection | None = None
+
 
 def load_user_lines() -> list[str]:
     """Return previously stored user lines, trimmed to the last MAX_USER_LINES."""
@@ -40,32 +43,35 @@ def load_user_lines() -> list[str]:
 
 
 def init_db() -> None:
-    """Ensure the SQLite database exists."""
+    """Ensure the SQLite database exists and initialize global connection."""
+    global db_conn
     try:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute(
-                '''
-                CREATE TABLE IF NOT EXISTS lines (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    line TEXT,
-                    created_at TEXT
-                )
-                '''
+        db_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        db_conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS lines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                line TEXT,
+                created_at TEXT
             )
-            conn.commit()
+            '''
+        )
+        db_conn.commit()
     except Exception:
         logging.exception("Failed to initialize lines database")
 
 
 def store_line(line: str) -> None:
     """Persist a line to the database and the log file."""
+    if db_conn is None:
+        logging.error("Database not initialized")
+        return
     try:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute(
-                'INSERT INTO lines (line, created_at) VALUES (?, ?)',
-                (line, datetime.now(UTC).isoformat()),
-            )
-            conn.commit()
+        db_conn.execute(
+            'INSERT INTO lines (line, created_at) VALUES (?, ?)',
+            (line, datetime.now(UTC).isoformat()),
+        )
+        db_conn.commit()
     except Exception:
         logging.exception("Failed to store line")
         return
@@ -148,6 +154,12 @@ async def cleanup_chat_states() -> None:
         await asyncio.sleep(CLEANUP_INTERVAL)
 
 
+async def close_db(app: Application) -> None:
+    """Close the global database connection."""
+    if db_conn is not None:
+        db_conn.close()
+
+
 async def monologue(app: Application, chat_id: int) -> None:
     state = chat_states.setdefault(chat_id, ChatState())
     async for chunk in _chunk_stream(state):
@@ -226,7 +238,13 @@ def main() -> None:
     async def post_init(app: Application) -> None:
         asyncio.create_task(cleanup_chat_states())
 
-    app = Application.builder().token(token).post_init(post_init).build()
+    app = (
+        Application.builder()
+        .token(token)
+        .post_init(post_init)
+        .post_shutdown(close_db)
+        .build()
+    )
     app.add_handler(CommandHandler('start', start))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
