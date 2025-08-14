@@ -4,6 +4,8 @@ import random
 import re
 import sqlite3
 import logging
+import math
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,20 +29,31 @@ MAX_USER_LINES = 1000
 
 # Global connection to be shared across threads
 db_conn: sqlite3.Connection | None = None
+# Stored user lines and their weights
+user_lines: list[str] = []
+user_weights: list[float] = []
 
 
-def load_user_lines() -> list[str]:
-    """Return previously stored user lines, trimmed to the last MAX_USER_LINES."""
-    if not LINES_FILE.exists():
-        return []
-    with LINES_FILE.open('r', encoding='utf-8') as f:
-        lines = [line.strip() for line in f if line.strip()]
+def load_user_lines() -> tuple[list[str], list[float]]:
+    """Return previously stored user lines and weights."""
+    if not DB_PATH.exists():
+        return [], []
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT line, perplexity, resonance FROM lines ORDER BY id'
+            )
+            rows = cur.fetchall()
+    except Exception:
+        logging.exception("Failed to load user lines")
+        return [], []
+    lines = [r[0] for r in rows]
+    weights = [(r[1] or 0.0) + (r[2] or 0.0) for r in rows]
     if len(lines) > MAX_USER_LINES:
         lines = lines[-MAX_USER_LINES:]
-        with LINES_FILE.open('w', encoding='utf-8') as f:
-            for line in lines:
-                f.write(line + '\n')
-    return lines
+        weights = weights[-MAX_USER_LINES:]
+    return lines, weights
 
 
 def init_db() -> None:
@@ -53,38 +66,100 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS lines (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 line TEXT,
+                entropy REAL,
+                perplexity REAL,
+                resonance REAL,
                 created_at TEXT
             )
             '''
         )
+        # Ensure new columns exist if database was created earlier
+        cur = db_conn.cursor()
+        cur.execute('PRAGMA table_info(lines)')
+        cols = [c[1] for c in cur.fetchall()]
+        for col in ('entropy', 'perplexity', 'resonance'):
+            if col not in cols:
+                cur.execute(f'ALTER TABLE lines ADD COLUMN {col} REAL')
         db_conn.commit()
     except Exception:
         logging.exception("Failed to initialize lines database")
 
 
-def store_line(line: str) -> None:
-    """Persist a line to the database and the log file."""
+POSITIVE_WORDS = {
+    'love',
+    'happy',
+    'joy',
+    'yes',
+    'good',
+    'hope',
+    'dream',
+}
+NEGATIVE_WORDS = {
+    'no',
+    'sad',
+    'bad',
+    'fear',
+    'hate',
+    'dark',
+}
+
+
+def compute_metrics(line: str) -> tuple[float, float, float]:
+    tokens = re.findall(r"\w+", line.lower())
+    if not tokens:
+        return 0.0, 0.0, 0.0
+    total = len(tokens)
+    counts = Counter(tokens)
+    probs = [c / total for c in counts.values()]
+    entropy = -sum(p * math.log2(p) for p in probs)
+    perplexity = 2 ** entropy
+    pos = sum(t in POSITIVE_WORDS for t in tokens)
+    neg = sum(t in NEGATIVE_WORDS for t in tokens)
+    emotion_score = pos - neg
+    num_count = sum(t.isdigit() for t in tokens)
+    resonance = abs(emotion_score) + num_count
+    return entropy, perplexity, resonance
+
+
+def store_line(line: str) -> float:
+    """Persist a line to the database, log file, and return its weight."""
     if db_conn is None:
         logging.error("Database not initialized")
-        return
+        return 0.0
+    entropy, perplexity, resonance = compute_metrics(line)
     try:
         db_conn.execute(
-            'INSERT INTO lines (line, created_at) VALUES (?, ?)',
-            (line, datetime.now(UTC).isoformat()),
+            '''
+            INSERT INTO lines (
+                line, entropy, perplexity, resonance, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ''',
+            (
+                line,
+                entropy,
+                perplexity,
+                resonance,
+                datetime.now(UTC).isoformat(),
+            ),
         )
         db_conn.commit()
     except Exception:
         logging.exception("Failed to store line")
-        return
+        return 0.0
     with LINES_FILE.open('a', encoding='utf-8') as f:
         f.write(line + '\n')
+    weight = perplexity + resonance
+    user_lines.append(line)
+    user_weights.append(weight)
+    return weight
 
 
 def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
-    """Trim user_lines and the log file to the last max_lines entries."""
+    """Trim user_lines, weights, and log file to the last max_lines entries."""
     if len(user_lines) <= max_lines:
         return
     del user_lines[:-max_lines]
+    del user_weights[:-max_lines]
     with LINES_FILE.open('w', encoding='utf-8') as f:
         for line in user_lines:
             f.write(line + '\n')
@@ -100,13 +175,22 @@ def text_chunks() -> Iterator[str]:
                 break
             buffer += data
             while len(buffer) > 1024:
-                split_pos = max(buffer.rfind(" ", 0, 1024), buffer.rfind("\n", 0, 1024))
+                split_pos = max(
+                    buffer.rfind(" ", 0, 1024),
+                    buffer.rfind("\n", 0, 1024),
+                )
                 if split_pos == -1:
                     # No whitespace in the first chunk, search entire buffer
-                    split_pos = max(buffer.rfind(" "), buffer.rfind("\n"))
+                    split_pos = max(
+                        buffer.rfind(" "),
+                        buffer.rfind("\n"),
+                    )
                     if split_pos == -1:
                         break
-                chunk, buffer = buffer[:split_pos].strip(), buffer[split_pos + 1 :]
+                chunk, buffer = (
+                    buffer[:split_pos].strip(),
+                    buffer[split_pos + 1:],
+                )
                 if chunk:
                     yield chunk
     remainder = buffer.strip()
@@ -136,7 +220,7 @@ class ChatState:
 
 
 chat_states: dict[int, ChatState] = {}
-user_lines: list[str] = load_user_lines()
+user_lines, user_weights = load_user_lines()
 
 CLEANUP_INTERVAL = 60
 STALE_AFTER = 3600
@@ -186,7 +270,7 @@ async def _chunk_stream(state: ChatState):
             prefix = state.next_prefix
             state.next_prefix = None
         elif user_lines and random.random() < 0.5:
-            prefix = random.choice(user_lines)
+            prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
         yield f"{prefix} {chunk}" if prefix else chunk
         await asyncio.sleep(0)
 
@@ -197,14 +281,14 @@ def prepare_lines(text: str) -> list[str]:
     cleaned = [c for c in cleaned if c]
     if not cleaned:
         return []
-    lines_count = 2 if len(cleaned) <= 2 else random.randint(2, 3)
-    group_size = max(1, len(cleaned) // lines_count)
-    lines = []
-    idx = 0
-    for _ in range(lines_count):
-        lines.append(' '.join(cleaned[idx:idx + group_size]))
-        idx += group_size
-    return lines
+    scored = [
+        (line, compute_metrics(line))
+        for line in cleaned
+    ]
+    scored.sort(key=lambda x: x[1][1] + x[1][2], reverse=True)
+    lines_count = 2 if len(scored) <= 2 else random.randint(2, 3)
+    selected = [line for line, _ in scored[:lines_count]]
+    return selected
 
 
 async def handle_message(
@@ -214,13 +298,14 @@ async def handle_message(
     lines = prepare_lines(text)
     if not lines:
         return
-    for line in lines:
-        store_line(line)
-        user_lines.append(line)
+    weights = [store_line(line) for line in lines]
     trim_user_lines()
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
-    state.next_prefix = random.choice(lines)
+    if weights:
+        state.next_prefix = random.choices(lines, weights=weights, k=1)[0]
+    else:
+        state.next_prefix = random.choice(lines)
     state.last_activity = datetime.now(UTC)
 
 
@@ -238,9 +323,11 @@ def main() -> None:
     token = os.environ.get('TELEGRAM_TOKEN')
     if not token:
         raise RuntimeError(
-            'TELEGRAM_TOKEN is not set. Provide your bot token via the TELEGRAM_TOKEN environment variable or a .env file.'
+            'TELEGRAM_TOKEN is not set. Provide your bot token via the '
+            'TELEGRAM_TOKEN environment variable or a .env file.'
         )
     init_db()
+
     async def post_init(app: Application) -> None:
         asyncio.create_task(cleanup_chat_states())
 
