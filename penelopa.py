@@ -2,6 +2,7 @@ import hashlib
 import os
 import sqlite3
 import subprocess
+import zlib
 from datetime import UTC, datetime
 
 DB_PATH = 'penelopa.db'
@@ -40,7 +41,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             commit_hash TEXT,
             repo_hash TEXT,
-            diff TEXT,
+            diff BLOB,
             size INTEGER,
             created_at TEXT
         )
@@ -62,21 +63,54 @@ def log_change(
     repo_hash: str,
     diff: str,
 ) -> None:
-    size = len(diff.encode('utf-8'))
+    compressed_diff = zlib.compress(diff.encode('utf-8'))
+    size = len(compressed_diff)
     conn.execute(
         '''
         INSERT INTO changes (commit_hash, repo_hash, diff, size, created_at)
         VALUES (?, ?, ?, ?, ?)
         ''',
-        (commit_hash, repo_hash, diff, size, datetime.now(UTC).isoformat()),
+        (
+            commit_hash,
+            repo_hash,
+            compressed_diff,
+            size,
+            datetime.now(UTC).isoformat(),
+        ),
     )
     conn.commit()
+
+
+def fetch_diff(conn: sqlite3.Connection, commit_hash: str) -> str | None:
+    """Return the decompressed diff for a commit hash if present."""
+    cur = conn.cursor()
+    cur.execute(
+        'SELECT diff FROM changes WHERE commit_hash = ?',
+        (commit_hash,),
+    )
+    row = cur.fetchone()
+    if row:
+        return zlib.decompress(row[0]).decode('utf-8')
+    return None
 
 
 def total_logged_size(conn: sqlite3.Connection) -> int:
     cur = conn.cursor()
     cur.execute('SELECT COALESCE(SUM(size), 0) FROM changes')
     return cur.fetchone()[0]
+
+
+def cleanup_db(conn: sqlite3.Connection) -> None:
+    """Delete oldest rows until total size is under the threshold."""
+    while total_logged_size(conn) > THRESHOLD_BYTES:
+        conn.execute(
+            """
+            DELETE FROM changes WHERE id = (
+                SELECT id FROM changes ORDER BY id ASC LIMIT 1
+            )
+            """
+        )
+    conn.commit()
 
 
 def fine_tune() -> None:
@@ -106,6 +140,7 @@ def main() -> None:
 
     if total_logged_size(conn) > THRESHOLD_BYTES:
         fine_tune()
+        cleanup_db(conn)
 
     conn.close()
 
