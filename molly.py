@@ -148,6 +148,7 @@ def store_line(line: str) -> float:
         return 0.0
     with LINES_FILE.open('a', encoding='utf-8') as f:
         f.write(line + '\n')
+    logging.info("Stored user line: %s", line)
     weight = perplexity + resonance
     user_lines.append(line)
     user_weights.append(weight)
@@ -276,17 +277,32 @@ async def _chunk_stream(state: ChatState):
 
 
 def prepare_lines(text: str) -> list[str]:
-    sentences = re.split(r'[.!?]+', text)
-    cleaned = [re.sub(r'[^\w\s]', '', s).strip() for s in sentences]
-    cleaned = [c for c in cleaned if c]
-    if not cleaned:
+    raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    segments: list[str] = []
+    for raw in raw_lines:
+        parts = re.split(r'[.!?]+', raw)
+        for part in parts:
+            part = part.strip()
+            if part:
+                segments.append(part)
+    if not segments:
         return []
+    if len(segments) < 2:
+        words = segments[0].split()
+        if len(words) > 4:
+            cut = random.randint(1, len(words) - 1)
+            first = ' '.join(words[:cut])
+            second = ' '.join(words[cut:])
+            segments = [first]
+            if second:
+                segments.append(second)
     scored = [
         (line, compute_metrics(line))
-        for line in cleaned
+        for line in segments
     ]
     scored.sort(key=lambda x: x[1][1] + x[1][2], reverse=True)
-    lines_count = 2 if len(scored) <= 2 else random.randint(2, 3)
+    base_count = 2 if len(scored) <= 2 else random.randint(2, 3)
+    lines_count = min(len(scored), base_count)
     selected = [line for line, _ in scored[:lines_count]]
     return selected
 
