@@ -6,11 +6,11 @@ import sqlite3
 import logging
 import math
 import aiosqlite
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Iterator
+from functools import lru_cache
 import hashlib
 import subprocess
 import tempfile
@@ -28,10 +28,12 @@ from telegram.ext import (
 from dotenv import load_dotenv
 import numpy as np
 import tiktoken
+import string
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 load_dotenv()
 
@@ -54,6 +56,14 @@ try:
 except ValueError:  # pragma: no cover - invalid values treated as default
     THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
 MAX_MESSAGE_LENGTH = 4096
+
+# Sentiment analyzer and small language model for metrics
+sentiment_analyzer = SentimentIntensityAnalyzer()
+_char_vocab = string.ascii_lowercase + string.digits + " ?"
+_char_to_idx = {c: i for i, c in enumerate(_char_vocab)}
+_vocab_size = len(_char_vocab)
+torch.manual_seed(0)
+_bigram_weights = torch.randn(_vocab_size, _vocab_size)
 
 # Global connection to be shared across coroutines
 db_conn: aiosqlite.Connection | None = None
@@ -128,37 +138,25 @@ async def init_db() -> None:
         logging.exception("Failed to initialize lines database")
 
 
-POSITIVE_WORDS = {
-    'love',
-    'happy',
-    'joy',
-    'yes',
-    'good',
-    'hope',
-    'dream',
-}
-NEGATIVE_WORDS = {
-    'no',
-    'sad',
-    'bad',
-    'fear',
-    'hate',
-    'dark',
-}
-
-
+@lru_cache(maxsize=1024)
 def compute_metrics(line: str) -> tuple[float, float, float]:
     tokens = re.findall(r"\w+", line.lower())
     if not tokens:
         return 0.0, 0.0, 0.0
-    total = len(tokens)
-    counts = Counter(tokens)
-    probs = [c / total for c in counts.values()]
-    entropy = -sum(p * math.log2(p) for p in probs)
-    perplexity = 2 ** entropy
-    pos = sum(t in POSITIVE_WORDS for t in tokens)
-    neg = sum(t in NEGATIVE_WORDS for t in tokens)
-    emotion_score = pos - neg
+
+    ids = [_char_to_idx.get(c, _char_to_idx['?']) for c in line.lower()]
+    if len(ids) < 2:
+        loss = torch.tensor(0.0)
+    else:
+        x = torch.tensor(ids[:-1])
+        y = torch.tensor(ids[1:])
+        logits = _bigram_weights[x]
+        loss = F.cross_entropy(logits, y)
+    entropy = loss.item() / math.log(2) - math.log2(_vocab_size)
+    perplexity = math.exp(loss.item()) / _vocab_size
+
+    scores = sentiment_analyzer.polarity_scores(line)
+    emotion_score = scores["compound"]
     num_count = sum(t.isdigit() for t in tokens)
     resonance = abs(emotion_score) + num_count
     return entropy, perplexity, resonance
