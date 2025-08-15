@@ -30,6 +30,14 @@ def test_split_and_select(monkeypatch):
     assert lines == ["123 456 789", "Good day"]
 
 
+def test_split_fragments_metrics():
+    text = "one two three four five"
+    fragments = molly.split_fragments(
+        text, entropy_threshold=2.0, perplexity_threshold=4.0
+    )
+    assert fragments == ["one two three four", "five"]
+
+
 def test_store_line(tmp_path, monkeypatch):
     async def runner():
         db_path = tmp_path / "lines.db"
