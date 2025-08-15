@@ -42,6 +42,8 @@ MAX_MESSAGE_LENGTH = 4096
 
 # Global connection to be shared across threads
 db_conn: sqlite3.Connection | None = None
+# Lock to serialize database access
+db_lock = asyncio.Lock()
 # Stored user lines and their weights
 user_lines: list[str] = []
 user_weights: list[float] = []
@@ -136,28 +138,29 @@ def compute_metrics(line: str) -> tuple[float, float, float]:
     return entropy, perplexity, resonance
 
 
-def store_line(line: str) -> float:
+async def store_line(line: str) -> float:
     """Persist a line to the database, log file, and return its weight."""
     if db_conn is None:
         logging.error("Database not initialized")
         return 0.0
     entropy, perplexity, resonance = compute_metrics(line)
     try:
-        db_conn.execute(
-            '''
-            INSERT INTO lines (
-                line, entropy, perplexity, resonance, created_at
-            ) VALUES (?, ?, ?, ?, ?)
-            ''',
-            (
-                line,
-                entropy,
-                perplexity,
-                resonance,
-                datetime.now(UTC).isoformat(),
-            ),
-        )
-        db_conn.commit()
+        async with db_lock:
+            db_conn.execute(
+                '''
+                INSERT INTO lines (
+                    line, entropy, perplexity, resonance, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ''',
+                (
+                    line,
+                    entropy,
+                    perplexity,
+                    resonance,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            db_conn.commit()
     except Exception:
         logging.exception("Failed to store line")
         return 0.0
@@ -267,7 +270,7 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
     if prefix:
         chunk = f"{prefix} {chunk}"
     entropy, perplexity, _ = compute_metrics(chunk)
-    store_line(chunk)
+    await store_line(chunk)
     delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
     await simulate_typing(app.bot, chat_id, delay)
     state.awaiting_response = False
@@ -346,7 +349,9 @@ async def handle_message(
     lines = prepare_lines(text)
     if not lines:
         return
-    weights = [store_line(line) for line in lines]
+    weights = []
+    for line in lines:
+        weights.append(await store_line(line))
     trim_user_lines()
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
