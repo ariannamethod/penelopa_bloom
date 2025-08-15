@@ -1,9 +1,5 @@
-import sys
-from pathlib import Path
 import pandas as pd
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-from frm import read_frm, write_frm  # noqa: E402
+from molly.frm import read_frm, write_frm
 
 
 def test_round_trip(tmp_path):

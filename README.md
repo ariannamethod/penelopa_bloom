@@ -13,8 +13,7 @@ Molly never replies directly. She quietly splits each incoming message into phra
 ```mermaid
 graph TD
     root((penelopa_bloom))
-    root --> molly.py
-    root --> ullyses.py
+    root --> molly[(molly/)]
     root --> data[(data/)]
     root --> origin[(origin/)]
     root --> requirements.txt

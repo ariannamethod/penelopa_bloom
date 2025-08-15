@@ -1,1 +1,1 @@
-worker: python molly.py
+worker: python -m molly

@@ -1,12 +1,9 @@
-import sys
-from pathlib import Path
 import math
 import sqlite3
 
 import pytest
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-import molly  # noqa: E402
+import asyncio
+import molly
 
 
 def test_compute_metrics():
@@ -36,7 +33,7 @@ def test_store_line(tmp_path, monkeypatch):
     molly.user_weights.clear()
     molly.db_conn = None
     molly.init_db()
-    weight = molly.store_line("Love 123")
+    weight = asyncio.run(molly.store_line("Love 123"))
     entropy, perplexity, resonance = molly.compute_metrics("Love 123")
     assert weight == pytest.approx(perplexity + resonance)
     assert molly.user_lines == ["Love 123"]

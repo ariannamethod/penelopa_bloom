@@ -5,11 +5,15 @@ from pathlib import Path
 from typing import Iterator
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = (ROOT / "molly.py").read_text(encoding="utf-8")
+SOURCE = (ROOT / "molly" / "__init__.py").read_text(encoding="utf-8")
 
 # Extract constants
-ORIGIN_TEXT = ROOT / re.search(r"^ORIGIN_TEXT = Path\('([^']+)'\)", SOURCE, re.MULTILINE).group(1)
-MAX_MESSAGE_LENGTH = int(re.search(r"^MAX_MESSAGE_LENGTH = (\d+)", SOURCE, re.MULTILINE).group(1))
+ORIGIN_TEXT = ROOT / re.search(
+    r"^ORIGIN_TEXT = Path\('([^']+)'\)", SOURCE, re.MULTILINE
+).group(1)
+MAX_MESSAGE_LENGTH = int(
+    re.search(r"^MAX_MESSAGE_LENGTH = (\d+)", SOURCE, re.MULTILINE).group(1)
+)
 
 # Extract random_chunks function without importing heavy dependencies
 module = {}
@@ -17,7 +21,7 @@ for node in ast.parse(SOURCE).body:
     if isinstance(node, ast.FunctionDef) and node.name == "random_chunks":
         func_code = ast.Module(body=[node], type_ignores=[])
         exec(
-            compile(func_code, filename="molly.py", mode="exec"),
+            compile(func_code, filename="molly/__init__.py", mode="exec"),
             {
                 "Path": Path,
                 "random": random,
@@ -40,7 +44,7 @@ def chunk_string(text: str) -> list[str]:
             split_pos = buffer.find(" ", MAX_MESSAGE_LENGTH)
             if split_pos == -1:
                 break
-        chunk, buffer = buffer[:split_pos], buffer[split_pos + 1 :]
+        chunk, buffer = buffer[:split_pos], buffer[split_pos + 1:]
         if chunk:
             chunks.append(chunk)
     remainder = buffer.strip()
