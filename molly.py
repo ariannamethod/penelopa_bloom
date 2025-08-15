@@ -406,10 +406,11 @@ async def handle_message(
     weights = []
     for line in lines:
         weights.append(await store_line(line))
+    total_weight = sum(weights)
     trim_user_lines()
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
-    if weights:
+    if weights and total_weight > 0:
         state.next_prefix = random.choices(lines, weights=weights, k=1)[0]
     else:
         state.next_prefix = random.choice(lines)
