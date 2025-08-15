@@ -268,7 +268,7 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
         chunk = f"{prefix} {chunk}"
     entropy, perplexity, _ = compute_metrics(chunk)
     store_line(chunk)
-    delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
+    delay = random.randint(1, 2) if state.awaiting_response else random.randint(1, 3)
     await simulate_typing(app.bot, chat_id, delay)
     state.awaiting_response = False
     await app.bot.send_message(chat_id=chat_id, text=chunk)
@@ -324,8 +324,32 @@ async def monologue(app: Application, chat_id: int) -> None:
 
 
 def prepare_lines(text: str) -> list[str]:
-    sentences = re.split(r'[.!?]+', text)
-    cleaned = [re.sub(r'[^\w\s]', '', s).strip() for s in sentences]
+    raw_segments: list[str] = []
+    for raw_line in text.splitlines():
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        # Split on sentence punctuation if it exists
+        parts = re.split(r'[.!?]+', raw_line)
+        parts = [p.strip() for p in parts if p.strip()]
+        if not parts:
+            continue
+        raw_segments.extend(parts)
+    if not raw_segments and text.strip():
+        raw_segments = [text.strip()]
+
+    fragments: list[str] = []
+    for segment in raw_segments:
+        tokens = segment.split()
+        if len(tokens) > 12:
+            # Break long lines into smaller fragments to capture half-sentences
+            for i in range(0, len(tokens), 8):
+                frag = " ".join(tokens[i:i+8])
+                fragments.append(frag)
+        else:
+            fragments.append(segment)
+
+    cleaned = [re.sub(r'[^\w\s]', '', f).strip() for f in fragments]
     cleaned = [c for c in cleaned if c]
     if not cleaned:
         return []
@@ -356,7 +380,7 @@ async def handle_message(
         state.next_prefix = random.choice(lines)
     state.last_activity = datetime.now(UTC)
     state.awaiting_response = True
-    schedule_next_message(context.application, chat_id, state, delay=random.randint(3, 6))
+    schedule_next_message(context.application, chat_id, state, delay=random.randint(1, 2))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
