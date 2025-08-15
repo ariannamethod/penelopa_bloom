@@ -83,6 +83,22 @@ def test_trim_user_lines(tmp_path, monkeypatch):
     asyncio.run(runner())
 
 
+def test_trim_user_lines_no_limit(tmp_path, monkeypatch):
+    async def runner():
+        lines_file = tmp_path / "lines.txt"
+        lines_file.write_text("a\nb\nc\n", encoding="utf-8")
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        molly.user_lines[:] = ["a", "b", "c"]
+        molly.user_weights[:] = [1.0, 2.0, 3.0]
+        monkeypatch.setattr(molly, "MAX_USER_LINES", None)
+        await molly.trim_user_lines()
+        assert molly.user_lines == ["a", "b", "c"]
+        assert molly.user_weights == [1.0, 2.0, 3.0]
+        assert lines_file.read_text(encoding="utf-8") == "a\nb\nc\n"
+
+    asyncio.run(runner())
+
+
 def test_concurrent_store_line(tmp_path, monkeypatch):
     async def runner():
         db_path = tmp_path / "lines.db"

@@ -33,10 +33,16 @@ import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
+load_dotenv()
+
 ORIGIN_TEXT = Path('origin/molly.md')
 LINES_FILE = Path('origin/logs/lines.txt')
 DB_PATH = Path('origin/logs/lines.db')
-MAX_USER_LINES = 1000
+_max_lines = os.getenv("MAX_USER_LINES")
+try:
+    MAX_USER_LINES = int(_max_lines) if _max_lines else None
+except ValueError:  # pragma: no cover - invalid values treated as no limit
+    MAX_USER_LINES = None
 CHANGELOG_DB = 'penelopa.db'
 THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
 MAX_MESSAGE_LENGTH = 4096
@@ -69,7 +75,7 @@ async def load_user_lines() -> tuple[list[str], list[float]]:
         return [], []
     lines = [r[0] for r in rows]
     weights = [(r[1] or 0.0) + (r[2] or 0.0) for r in rows]
-    if len(lines) > MAX_USER_LINES:
+    if MAX_USER_LINES is not None and len(lines) > MAX_USER_LINES:
         lines = lines[-MAX_USER_LINES:]
         weights = weights[-MAX_USER_LINES:]
     return lines, weights
@@ -185,8 +191,12 @@ async def store_line(line: str) -> float:
     return await _store_line(line)
 
 
-async def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
-    """Trim user_lines, weights, and log file to the last max_lines entries."""
+async def trim_user_lines(max_lines: int | None = None) -> None:
+    """Trim user_lines, weights, and log file to the last ``max_lines`` entries."""
+    if max_lines is None:
+        max_lines = MAX_USER_LINES
+    if max_lines is None:
+        return
     async with lines_lock:
         if len(user_lines) <= max_lines:
             return
@@ -491,7 +501,7 @@ async def handle_message(
     selected = select_prefix_fragments(fragments)
     for frag in fragments:
         await store_line(frag)
-    if len(user_lines) > MAX_USER_LINES:
+    if MAX_USER_LINES is not None and len(user_lines) > MAX_USER_LINES:
         await trim_user_lines()
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
