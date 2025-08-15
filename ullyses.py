@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import yaml
+from molly import GPTConfig, GPT
 
 def _str2bool(v: str) -> bool:
     if v.lower() in {"1", "true", "yes", "y"}:
@@ -93,8 +94,6 @@ def update_config(cfg: Dict[str, Any]) -> None:
             continue
         cfg[k] = v
 
-
-from molly import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
