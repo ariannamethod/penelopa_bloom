@@ -326,6 +326,13 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
                 prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
             else:
                 prefix = random.choice(user_lines)
+        available = MAX_MESSAGE_LENGTH - (len(prefix) + 1 if prefix else 0)
+        if len(chunk) > available:
+            split_pos = chunk.rfind(" ", 0, available)
+            if split_pos != -1:
+                chunk = chunk[:split_pos]
+            else:
+                chunk = chunk[:available]
         if prefix:
             chunk = f"{prefix} {chunk}"
         entropy, perplexity, _ = compute_metrics(chunk)
