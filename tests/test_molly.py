@@ -111,14 +111,14 @@ def test_store_line(tmp_path, monkeypatch):
     asyncio.run(runner())
 
 
-def test_trim_user_lines(tmp_path, monkeypatch):
+def test_archive_user_lines(tmp_path, monkeypatch):
     async def runner():
         lines_file = tmp_path / "lines.txt"
         lines_file.write_text("a\nb\nc\n", encoding="utf-8")
         monkeypatch.setattr(molly, "LINES_FILE", lines_file)
         molly.user_lines[:] = ["a", "b", "c"]
         molly.user_weights[:] = [1.0, 2.0, 3.0]
-        await molly.trim_user_lines(max_lines=2)
+        await molly.archive_user_lines(max_lines=2)
         archive_file = lines_file.with_name("lines.archive.txt")
         assert molly.user_lines == ["b", "c"]
         assert molly.user_weights == [2.0, 3.0]
@@ -128,14 +128,14 @@ def test_trim_user_lines(tmp_path, monkeypatch):
     asyncio.run(runner())
 
 
-def test_trim_user_lines_no_limit(tmp_path, monkeypatch):
+def test_archive_user_lines_no_limit(tmp_path, monkeypatch):
     async def runner():
         lines_file = tmp_path / "lines.txt"
         lines_file.write_text("a\nb\nc\n", encoding="utf-8")
         monkeypatch.setattr(molly, "LINES_FILE", lines_file)
         molly.user_lines[:] = ["a", "b", "c"]
         molly.user_weights[:] = [1.0, 2.0, 3.0]
-        await molly.trim_user_lines()
+        await molly.archive_user_lines()
         assert molly.user_lines == ["a", "b", "c"]
         assert molly.user_weights == [1.0, 2.0, 3.0]
         assert lines_file.read_text(encoding="utf-8") == "a\nb\nc\n"
@@ -143,7 +143,7 @@ def test_trim_user_lines_no_limit(tmp_path, monkeypatch):
     asyncio.run(runner())
 
 
-def test_trim_user_lines_archives(tmp_path, monkeypatch):
+def test_archive_user_lines_archives(tmp_path, monkeypatch):
     async def runner():
         lines_file = tmp_path / "lines.txt"
         content = "\n".join(str(i) for i in range(100)) + "\n"
@@ -151,11 +151,31 @@ def test_trim_user_lines_archives(tmp_path, monkeypatch):
         monkeypatch.setattr(molly, "LINES_FILE", lines_file)
         molly.user_lines[:] = [str(i) for i in range(100)]
         molly.user_weights[:] = [float(i) for i in range(100)]
-        await molly.trim_user_lines(max_lines=10)
+        await molly.archive_user_lines(max_lines=10)
         archive_file = lines_file.with_name("lines.archive.txt")
         assert molly.user_lines == [str(i) for i in range(90, 100)]
         assert archive_file.read_text(encoding="utf-8").splitlines() == [str(i) for i in range(90)]
         assert lines_file.read_text(encoding="utf-8").splitlines() == [str(i) for i in range(90, 100)]
+
+    asyncio.run(runner())
+
+
+def test_archive_user_lines_preserves_over_1000(tmp_path, monkeypatch):
+    async def runner():
+        lines_file = tmp_path / "lines.txt"
+        content = "\n".join(str(i) for i in range(1050)) + "\n"
+        lines_file.write_text(content, encoding="utf-8")
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        molly.user_lines[:] = [str(i) for i in range(1050)]
+        molly.user_weights[:] = [float(i) for i in range(1050)]
+        await molly.archive_user_lines(max_lines=1000)
+        archive_file = lines_file.with_name("lines.archive.txt")
+        assert molly.user_lines == [str(i) for i in range(50, 1050)]
+        archived = archive_file.read_text(encoding="utf-8").splitlines()
+        assert archived == [str(i) for i in range(50)]
+        remaining = lines_file.read_text(encoding="utf-8").splitlines()
+        assert remaining == [str(i) for i in range(50, 1050)]
+        assert len(archived) + len(remaining) == 1050
 
     asyncio.run(runner())
 
