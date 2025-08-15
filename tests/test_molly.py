@@ -61,15 +61,38 @@ def test_store_line(tmp_path, monkeypatch):
 
 
 def test_trim_user_lines(tmp_path, monkeypatch):
-    lines_file = tmp_path / "lines.txt"
-    lines_file.write_text("a\nb\nc\n", encoding="utf-8")
-    monkeypatch.setattr(molly, "LINES_FILE", lines_file)
-    molly.user_lines[:] = ["a", "b", "c"]
-    molly.user_weights[:] = [1.0, 2.0, 3.0]
-    molly.trim_user_lines(max_lines=2)
-    assert molly.user_lines == ["b", "c"]
-    assert molly.user_weights == [2.0, 3.0]
-    assert lines_file.read_text(encoding="utf-8") == "b\nc\n"
+    async def runner():
+        lines_file = tmp_path / "lines.txt"
+        lines_file.write_text("a\nb\nc\n", encoding="utf-8")
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        molly.user_lines[:] = ["a", "b", "c"]
+        molly.user_weights[:] = [1.0, 2.0, 3.0]
+        await molly.trim_user_lines(max_lines=2)
+        assert molly.user_lines == ["b", "c"]
+        assert molly.user_weights == [2.0, 3.0]
+        assert lines_file.read_text(encoding="utf-8") == "b\nc\n"
+
+    asyncio.run(runner())
+
+
+def test_concurrent_store_line(tmp_path, monkeypatch):
+    async def runner():
+        db_path = tmp_path / "lines.db"
+        lines_file = tmp_path / "lines.txt"
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        molly.user_lines.clear()
+        molly.user_weights.clear()
+        molly.db_conn = None
+        await molly.init_db()
+        await asyncio.gather(*(molly.store_line(f"line {i}") for i in range(5)))
+        assert len(molly.user_lines) == 5
+        assert set(molly.user_lines) == {f"line {i}" for i in range(5)}
+        assert len(molly.user_weights) == 5
+        await molly.db_conn.close()
+        molly.db_conn = None
+
+    asyncio.run(runner())
 
 
 def test_send_chunk_respects_limit(monkeypatch):
