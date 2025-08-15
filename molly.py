@@ -40,8 +40,6 @@ CHANGELOG_DB = 'penelopa.db'
 THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
 MAX_MESSAGE_LENGTH = 4096
 
-# Global connection to be shared across threads
-db_conn: sqlite3.Connection | None = None
 # Stored user lines and their weights
 user_lines: list[str] = []
 user_weights: list[float] = []
@@ -72,30 +70,28 @@ def load_user_lines() -> tuple[list[str], list[float]]:
 
 
 def init_db() -> None:
-    """Ensure the SQLite database exists and initialize global connection."""
-    global db_conn
+    """Ensure the SQLite database and its schema exist."""
     try:
-        db_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        db_conn.execute(
-            '''
-            CREATE TABLE IF NOT EXISTS lines (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                line TEXT,
-                entropy REAL,
-                perplexity REAL,
-                resonance REAL,
-                created_at TEXT
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS lines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    line TEXT,
+                    entropy REAL,
+                    perplexity REAL,
+                    resonance REAL,
+                    created_at TEXT
+                )
+                '''
             )
-            '''
-        )
-        # Ensure new columns exist if database was created earlier
-        cur = db_conn.cursor()
-        cur.execute('PRAGMA table_info(lines)')
-        cols = [c[1] for c in cur.fetchall()]
-        for col in ('entropy', 'perplexity', 'resonance'):
-            if col not in cols:
-                cur.execute(f'ALTER TABLE lines ADD COLUMN {col} REAL')
-        db_conn.commit()
+            cur = conn.cursor()
+            cur.execute('PRAGMA table_info(lines)')
+            cols = [c[1] for c in cur.fetchall()]
+            for col in ('entropy', 'perplexity', 'resonance'):
+                if col not in cols:
+                    cur.execute(f'ALTER TABLE lines ADD COLUMN {col} REAL')
+            conn.commit()
     except Exception:
         logging.exception("Failed to initialize lines database")
 
@@ -138,26 +134,24 @@ def compute_metrics(line: str) -> tuple[float, float, float]:
 
 def store_line(line: str) -> float:
     """Persist a line to the database, log file, and return its weight."""
-    if db_conn is None:
-        logging.error("Database not initialized")
-        return 0.0
     entropy, perplexity, resonance = compute_metrics(line)
     try:
-        db_conn.execute(
-            '''
-            INSERT INTO lines (
-                line, entropy, perplexity, resonance, created_at
-            ) VALUES (?, ?, ?, ?, ?)
-            ''',
-            (
-                line,
-                entropy,
-                perplexity,
-                resonance,
-                datetime.now(UTC).isoformat(),
-            ),
-        )
-        db_conn.commit()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                '''
+                INSERT INTO lines (
+                    line, entropy, perplexity, resonance, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ''',
+                (
+                    line,
+                    entropy,
+                    perplexity,
+                    resonance,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            conn.commit()
     except Exception:
         logging.exception("Failed to store line")
         return 0.0
@@ -391,8 +385,6 @@ def main() -> None:
         for task in background_tasks:
             task.cancel()
         await asyncio.gather(*background_tasks, return_exceptions=True)
-        if db_conn is not None:
-            db_conn.close()
 
     app = (
         Application.builder()
