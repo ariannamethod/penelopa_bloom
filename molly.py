@@ -280,8 +280,6 @@ async def simulate_typing(bot, chat_id: int, delay: int) -> None:
 class ChatState:
     generator: Iterator[str] = field(default_factory=text_chunks)
     next_prefix: str | None = None
-    messages_since_pause: int = 0
-    pause_target: int = field(default_factory=lambda: random.randint(6, 8))
     last_activity: datetime = field(
         default_factory=lambda: datetime.now(UTC)
     )
