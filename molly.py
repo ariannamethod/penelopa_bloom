@@ -324,15 +324,26 @@ async def monologue(app: Application, chat_id: int) -> None:
 
 
 def prepare_lines(text: str) -> list[str]:
-    sentences = re.split(r'[.!?]+', text)
-    cleaned = [re.sub(r'[^\w\s]', '', s).strip() for s in sentences]
-    cleaned = [c for c in cleaned if c]
-    if not cleaned:
+    """Split user text into emotionally charged fragments."""
+    raw_lines = [l.strip() for l in text.splitlines() if l.strip()]
+    fragments: list[str] = []
+    for line in raw_lines:
+        parts = re.split(r'[.!?]+', line)
+        for part in parts:
+            cleaned = re.sub(r'[^\w\s]', '', part).strip()
+            if cleaned:
+                fragments.append(cleaned)
+    if not fragments and raw_lines:
+        for line in raw_lines:
+            words = line.split()
+            chunk = random.randint(6, 12)
+            for i in range(0, len(words), chunk):
+                frag = ' '.join(words[i:i + chunk]).strip()
+                if frag:
+                    fragments.append(frag)
+    if not fragments:
         return []
-    scored = [
-        (line, compute_metrics(line))
-        for line in cleaned
-    ]
+    scored = [(line, compute_metrics(line)) for line in fragments]
     scored.sort(key=lambda x: x[1][1] + x[1][2], reverse=True)
     lines_count = 2 if len(scored) <= 2 else random.randint(2, 3)
     selected = [line for line, _ in scored[:lines_count]]
@@ -356,7 +367,7 @@ async def handle_message(
         state.next_prefix = random.choice(lines)
     state.last_activity = datetime.now(UTC)
     state.awaiting_response = True
-    schedule_next_message(context.application, chat_id, state, delay=random.randint(3, 6))
+    schedule_next_message(context.application, chat_id, state, delay=random.uniform(1, 2))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
