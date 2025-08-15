@@ -75,6 +75,10 @@ def init_db() -> None:
     """Ensure the SQLite database exists and initialize global connection."""
     global db_conn
     try:
+        try:
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            logging.exception("Failed to create database directory")
         db_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         db_conn.execute(
             '''
@@ -161,6 +165,10 @@ def store_line(line: str) -> float:
     except Exception:
         logging.exception("Failed to store line")
         return 0.0
+    try:
+        LINES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logging.exception("Failed to create log directory for lines")
     with LINES_FILE.open('a', encoding='utf-8') as f:
         f.write(line + '\n')
     weight = perplexity + resonance
