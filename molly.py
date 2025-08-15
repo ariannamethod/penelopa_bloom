@@ -6,6 +6,7 @@ import sqlite3
 import logging
 import math
 import aiosqlite
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -762,6 +763,38 @@ def total_logged_size(conn: sqlite3.Connection) -> int:
         return 0
 
 
+async def run_ullyses(dataset_name: str, timeout: float = 60.0) -> None:
+    """Run the fine-tuning script asynchronously.
+
+    Parameters
+    ----------
+    dataset_name: str
+        Name of the dataset to pass to the script.
+    timeout: float, optional
+        Maximum number of seconds to allow the process to run.
+    """
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            'ullyses.py',
+            f'--dataset={dataset_name}',
+        )
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.TimeoutError as exc:  # pragma: no cover - kill handled below
+            process.kill()
+            await process.communicate()
+            raise RuntimeError('Fine-tuning timed out') from exc
+        if process.returncode != 0:
+            raise RuntimeError(
+                f'Fine-tuning failed with code {process.returncode}'
+            )
+    except Exception:
+        logging.exception('Fine-tune process failed')
+        raise
+
+
 def fine_tune() -> None:
     """Fine-tune model on the original text and accumulated diffs."""
 
@@ -797,14 +830,7 @@ def fine_tune() -> None:
         val_ids.tofile(os.path.join(tmpdir, 'val.bin'))
 
         dataset_name = os.path.basename(tmpdir)
-        subprocess.run(
-            [
-                'python',
-                'ullyses.py',
-                f'--dataset={dataset_name}',
-            ],
-            check=True,
-        )
+        asyncio.run(run_ullyses(dataset_name))
 
         os.makedirs(os.path.join('origin', 'logs'), exist_ok=True)
         archive = os.path.join(

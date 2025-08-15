@@ -421,3 +421,34 @@ def test_handle_message_sets_insert_position(monkeypatch):
         molly.chat_states.clear()
 
     asyncio.run(runner())
+
+
+def test_run_ullyses_nonblocking(monkeypatch):
+    order: list[str] = []
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        class Proc:
+            returncode = 0
+
+            async def communicate(self):
+                order.append('proc_start')
+                await asyncio.sleep(0.05)
+                order.append('proc_end')
+                return b'', b''
+
+            def kill(self) -> None:  # pragma: no cover
+                pass
+
+        return Proc()
+
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', fake_create_subprocess_exec)
+
+    async def side_task():
+        await asyncio.sleep(0.01)
+        order.append('side')
+
+    async def runner():
+        await asyncio.gather(molly.run_ullyses('dummy'), side_task())
+
+    asyncio.run(runner())
+    assert order.index('side') < order.index('proc_end')
