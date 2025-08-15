@@ -38,7 +38,7 @@ LINES_FILE = Path('origin/logs/lines.txt')
 DB_PATH = Path('origin/logs/lines.db')
 MAX_USER_LINES = 1000
 CHANGELOG_DB = 'penelopa.db'
-THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
+FINE_TUNE_THRESHOLD = 100 * 1024  # 100 kilobytes
 MAX_MESSAGE_LENGTH = 4096
 
 # Global connection to be shared across coroutines
@@ -52,6 +52,17 @@ user_lines: list[str] = []
 user_weights: list[float] = []
 # Background tasks to cancel on shutdown
 background_tasks: list[asyncio.Task] = []
+
+
+def _load_fine_tune_threshold() -> None:
+    """Parse FINE_TUNE_THRESHOLD from environment."""
+    global FINE_TUNE_THRESHOLD
+    value = os.environ.get("FINE_TUNE_THRESHOLD")
+    if value:
+        try:
+            FINE_TUNE_THRESHOLD = int(value)
+        except ValueError as exc:  # pragma: no cover - defensive programming
+            raise RuntimeError("FINE_TUNE_THRESHOLD must be an integer") from exc
 
 
 async def load_user_lines() -> tuple[list[str], list[float]]:
@@ -524,6 +535,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def main() -> None:
     load_dotenv()
+    _load_fine_tune_threshold()
     token = os.environ.get('TELEGRAM_TOKEN')
     if not token:
         raise RuntimeError(
@@ -774,7 +786,7 @@ def monitor_repo_once() -> None:
             else:
                 print('No repository changes detected.')
 
-            if total_logged_size(conn) > THRESHOLD_BYTES:
+            if total_logged_size(conn) > FINE_TUNE_THRESHOLD:
                 fine_tune()
     except Exception:
         logging.exception("Database operation failed")

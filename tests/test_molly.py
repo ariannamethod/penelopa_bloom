@@ -68,6 +68,13 @@ def test_store_line(tmp_path, monkeypatch):
     asyncio.run(runner())
 
 
+def test_fine_tune_threshold_env(monkeypatch):
+    monkeypatch.setenv("FINE_TUNE_THRESHOLD", "2048")
+    molly.FINE_TUNE_THRESHOLD = 0
+    molly._load_fine_tune_threshold()
+    assert molly.FINE_TUNE_THRESHOLD == 2048
+
+
 def test_trim_user_lines(tmp_path, monkeypatch):
     async def runner():
         lines_file = tmp_path / "lines.txt"

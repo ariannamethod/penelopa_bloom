@@ -23,6 +23,13 @@ graph TD
     root --> LICENSE
 ```
 
+### Configuration
+
+The application can be tuned via environment variables:
+
+- `FINE_TUNE_THRESHOLD` — size in bytes of accumulated repository change logs
+  required to trigger fine‑tuning. Defaults to `102400` (100 KB).
+
 ### Technical TL;DR
 
 Penelope listens to every incoming message with a sensor that measures entropy and perplexity, turning language into quantitative signals.
