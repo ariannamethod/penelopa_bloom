@@ -45,6 +45,8 @@ MAX_MESSAGE_LENGTH = 4096
 db_conn: aiosqlite.Connection | None = None
 # Lock to serialize database access
 db_lock = asyncio.Lock()
+# Lock to protect in-memory line storage
+lines_lock = asyncio.Lock()
 # Stored user lines and their weights
 user_lines: list[str] = []
 user_weights: list[float] = []
@@ -172,8 +174,9 @@ async def _store_line(line: str) -> float:
     await asyncio.to_thread(_append_line, line)
 
     weight = perplexity + resonance
-    user_lines.append(line)
-    user_weights.append(weight)
+    async with lines_lock:
+        user_lines.append(line)
+        user_weights.append(weight)
     return weight
 
 
@@ -182,12 +185,13 @@ async def store_line(line: str) -> float:
     return await _store_line(line)
 
 
-def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
+async def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
     """Trim user_lines, weights, and log file to the last max_lines entries."""
-    if len(user_lines) <= max_lines:
-        return
-    del user_lines[:-max_lines]
-    del user_weights[:-max_lines]
+    async with lines_lock:
+        if len(user_lines) <= max_lines:
+            return
+        del user_lines[:-max_lines]
+        del user_weights[:-max_lines]
     with LINES_FILE.open("r+", encoding="utf-8") as f:
         f.seek(0)
         lines = f.readlines()
@@ -454,7 +458,7 @@ async def handle_message(
     for frag in fragments:
         await store_line(frag)
     if len(user_lines) > MAX_USER_LINES:
-        trim_user_lines()
+        await trim_user_lines()
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
     if selected:
