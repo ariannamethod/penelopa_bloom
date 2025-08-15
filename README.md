@@ -55,10 +55,9 @@ During generation, Molly selects prefixes from this database, weighted by the ev
 The codebase maintains logs and diff history, allowing an audit of both code and conversation.
 
 The sensor pipeline assures that every interaction contributes measurable complexity to the dialogue.
-
 Perplexity estimates the surprise of a line, while entropy captures the distributional richness of its tokens.
-
 Resonance blends emotional balance with the gravity of numbers, hinting at the pulse of the user.
+The cadence of replies depends on these metrics: higher entropy, perplexity, or resonance shortens the pause before the next message.
 
 Penelope absorbs not only linguistic sequences but also semantic shadows that lurk between words.
 
