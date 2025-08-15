@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 import math
 import sqlite3
+import asyncio
 
 import asyncio
 import pytest

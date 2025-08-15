@@ -375,6 +375,13 @@ async def cleanup_chat_states() -> None:
             if (now - state.last_activity).total_seconds() > STALE_AFTER
         ]
         for chat_id in stale:
+            state = chat_states[chat_id]
+            if state.message_task:
+                state.message_task.cancel()
+                try:
+                    await state.message_task
+                except asyncio.CancelledError:
+                    pass
             del chat_states[chat_id]
         await asyncio.sleep(CLEANUP_INTERVAL)
 
