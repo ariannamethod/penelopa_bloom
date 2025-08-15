@@ -161,6 +161,7 @@ def store_line(line: str) -> float:
     except Exception:
         logging.exception("Failed to store line")
         return 0.0
+    LINES_FILE.parent.mkdir(parents=True, exist_ok=True)
     with LINES_FILE.open('a', encoding='utf-8') as f:
         f.write(line + '\n')
     weight = perplexity + resonance
