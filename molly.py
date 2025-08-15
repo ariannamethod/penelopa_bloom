@@ -171,12 +171,11 @@ def store_line(line: str) -> float:
 
 def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
     """Trim user_lines, weights, and log file to the last max_lines entries."""
-    if len(user_lines) <= max_lines:
-        return
-    del user_lines[:-max_lines]
-    del user_weights[:-max_lines]
+    if len(user_lines) > max_lines:
+        del user_lines[:-max_lines]
+        del user_weights[:-max_lines]
     with LINES_FILE.open('w', encoding='utf-8') as f:
-        for line in user_lines:
+        for line in user_lines[-max_lines:]:
             f.write(line + '\n')
 
 
@@ -268,6 +267,7 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
         chunk = f"{prefix} {chunk}"
     entropy, perplexity, _ = compute_metrics(chunk)
     store_line(chunk)
+    trim_user_lines()
     delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
     await simulate_typing(app.bot, chat_id, delay)
     state.awaiting_response = False
