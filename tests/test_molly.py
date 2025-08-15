@@ -2,9 +2,6 @@ import sys
 from pathlib import Path
 import math
 import sqlite3
-import asyncio
-
-import asyncio
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -29,7 +26,8 @@ def test_prepare_lines(monkeypatch):
     assert lines == ["123 456 789", "Good day"]
 
 
-def test_store_line(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_store_line(tmp_path, monkeypatch):
     db_path = tmp_path / "lines.db"
     lines_file = tmp_path / "lines.txt"
     monkeypatch.setattr(molly, "DB_PATH", db_path)
@@ -38,7 +36,7 @@ def test_store_line(tmp_path, monkeypatch):
     molly.user_weights.clear()
     molly.db_conn = None
     molly.init_db()
-    weight = asyncio.run(molly.store_line("Love 123"))
+    weight = await molly.store_line("Love 123")
     entropy, perplexity, resonance = molly.compute_metrics("Love 123")
     assert weight == pytest.approx(perplexity + resonance)
     assert molly.user_lines == ["Love 123"]

@@ -179,9 +179,9 @@ async def _store_line(line: str) -> float:
     return weight
 
 
-def store_line(line: str) -> float:
-    """Synchronous wrapper around _store_line for ease of use."""
-    return asyncio.run(_store_line(line))
+async def store_line(line: str) -> float:
+    """Persist a line to storage and return its weight."""
+    return await _store_line(line)
 
 
 def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
