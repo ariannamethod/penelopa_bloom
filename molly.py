@@ -340,12 +340,12 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
         if prefix:
             chunk = f"{prefix} {chunk}"
         entropy, perplexity, _ = compute_metrics(chunk)
-        await _store_line(chunk)
         delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
         await simulate_typing(app.bot, chat_id, delay)
         state.awaiting_response = False
         try:
             await app.bot.send_message(chat_id=chat_id, text=chunk)
+            await _store_line(chunk)
         except Exception:
             logging.exception("Failed to send chunk")
         finally:
