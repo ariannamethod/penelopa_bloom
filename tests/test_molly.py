@@ -335,6 +335,59 @@ def test_send_chunk_does_not_store_unsent(tmp_path, monkeypatch):
     asyncio.run(runner())
 
 
+def test_send_chunk_resonance_modulates_prefix_probability(monkeypatch):
+    class DummyBot:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send_message(self, chat_id: int, text: str) -> None:
+            self.sent.append(text)
+
+        async def send_chat_action(self, chat_id: int, action: object) -> None:  # pragma: no cover
+            pass
+
+    class DummyApp:
+        def __init__(self, bot: DummyBot) -> None:
+            self.bot = bot
+
+    async def runner():
+        async def no_store(_: str) -> float:
+            return 0.0
+
+        async def no_typing(*args, **kwargs) -> None:
+            return None
+
+        def no_schedule(*args, **kwargs) -> None:
+            return None
+
+        monkeypatch.setattr(molly, "_store_line", no_store)
+        monkeypatch.setattr(molly, "simulate_typing", no_typing)
+        monkeypatch.setattr(molly, "schedule_next_message", no_schedule)
+
+        molly.user_lines[:] = ["hi"]
+        molly.user_weights[:] = [1.0]
+
+        bot = DummyBot()
+        app = DummyApp(bot)
+
+        monkeypatch.setattr(molly.random, "random", lambda: 0.3)
+
+        molly.avg_user_resonance = 0.0
+        molly._resonance_samples = 0
+        state = molly.ChatState(generator=iter(["abcdef"]))
+        await molly.send_chunk(app, 1, state)
+        assert bot.sent == ["abcdef"]
+
+        molly.avg_user_resonance = 2.0
+        molly._resonance_samples = 1
+        state = molly.ChatState(generator=iter(["abcdef"]))
+        await molly.send_chunk(app, 1, state)
+        assert bot.sent[-1] == "a hi bcdef"
+        assert molly.avg_user_resonance == pytest.approx(1.0)
+
+    asyncio.run(runner())
+
+
 def test_startup_no_side_loop(tmp_path, monkeypatch):
     async def runner() -> None:
         mod = importlib.reload(molly)

@@ -84,6 +84,9 @@ lines_lock = asyncio.Lock()
 # Stored user lines and their weights
 user_lines: list[str] = []
 user_weights: list[float] = []
+# Rolling resonance stats for user lines
+avg_user_resonance: float = 0.0
+_resonance_samples: int = 0
 # Background tasks to cancel on shutdown
 background_tasks: list[asyncio.Task] = []
 
@@ -394,12 +397,28 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
         if state.next_prefix:
             prefix = state.next_prefix
             state.next_prefix = None
-        elif user_lines and random.random() < 0.5:
-            total = sum(user_weights)
-            if total > 0:
-                prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
-            else:
-                prefix = random.choice(user_lines)
+        elif user_lines:
+            global avg_user_resonance, _resonance_samples
+            if _resonance_samples == 0:
+                res_vals = [compute_metrics(line)[2] for line in user_lines]
+                if res_vals:
+                    avg_user_resonance = sum(res_vals) / len(res_vals)
+                    _resonance_samples = len(res_vals)
+            insert_prob = 0.25 + min(avg_user_resonance / 4, 0.5)
+            if random.random() < insert_prob:
+                total = sum(user_weights)
+                if total > 0:
+                    prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
+                else:
+                    prefix = random.choice(user_lines)
+                _, _, res_val = compute_metrics(prefix)
+                logging.debug(
+                    "Prefix resonance %.3f (avg %.3f)", res_val, avg_user_resonance
+                )
+                avg_user_resonance = (
+                    avg_user_resonance * _resonance_samples + res_val
+                ) / (_resonance_samples + 1)
+                _resonance_samples += 1
         available = MAX_MESSAGE_LENGTH - (len(prefix) + 2 if prefix else 0)
         if len(chunk) > available:
             split_pos = chunk.rfind(" ", 0, available)
