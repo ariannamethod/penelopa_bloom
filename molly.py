@@ -47,8 +47,12 @@ DB_PATH = Path('origin/logs/lines.db')
 def get_max_user_lines() -> int | None:
     """Return the configured maximum number of user lines."""
     _max_lines = os.getenv("MAX_USER_LINES")
+    if _max_lines is None:
+        return None
+    if _max_lines == "" or _max_lines.lower() == "none":
+        return None
     try:
-        return int(_max_lines) if _max_lines else None
+        return int(_max_lines)
     except (TypeError, ValueError):  # pragma: no cover - invalid values treated as no limit
         return None
 
@@ -134,6 +138,18 @@ async def init_db() -> None:
                 perplexity REAL,
                 resonance REAL,
                 created_at TEXT
+            )
+            '''
+        )
+        await db_conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS archived_lines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                line TEXT,
+                entropy REAL,
+                perplexity REAL,
+                resonance REAL,
+                archived_at TEXT
             )
             '''
         )
@@ -243,6 +259,57 @@ async def archive_user_lines(max_lines: int | None = None) -> None:
         archive_file.parent.mkdir(parents=True, exist_ok=True)
         with archive_file.open("a", encoding="utf-8") as af:
             af.writelines(old_lines)
+        if db_conn is not None:
+            try:
+                async with db_lock:
+                    cursor = await db_conn.execute(
+                        "SELECT id, line, entropy, perplexity, resonance FROM lines ORDER BY id LIMIT ?",
+                        (len(old_lines),),
+                    )
+                    rows = await cursor.fetchall()
+                    if rows:
+                        await db_conn.executemany(
+                            """
+                            INSERT INTO archived_lines (
+                                line, entropy, perplexity, resonance, archived_at
+                            ) VALUES (?, ?, ?, ?, ?)
+                            """,
+                            [
+                                (
+                                    line,
+                                    ent,
+                                    perp,
+                                    res,
+                                    datetime.now(UTC).isoformat(),
+                                )
+                                for _id, line, ent, perp, res in rows
+                            ],
+                        )
+                        await db_conn.executemany(
+                            "DELETE FROM lines WHERE id = ?",
+                            [(_id,) for _id, *_ in rows],
+                        )
+                        await db_conn.commit()
+            except Exception:
+                logging.exception("Failed to archive lines to database")
+
+
+async def get_random_archived_line() -> tuple[str, float] | None:
+    """Return a random archived line and its resonance."""
+    if db_conn is None:
+        return None
+    try:
+        async with db_lock:
+            cursor = await db_conn.execute(
+                "SELECT line, resonance FROM archived_lines ORDER BY RANDOM() LIMIT 1"
+            )
+            row = await cursor.fetchone()
+        if row:
+            line, res = row
+            return line, res or 0.0
+    except Exception:
+        logging.exception("Failed to fetch archived line")
+    return None
 
 
 def text_chunks() -> Iterator[str]:
@@ -397,28 +464,35 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
         if state.next_prefix:
             prefix = state.next_prefix
             state.next_prefix = None
-        elif user_lines:
+        elif user_lines or db_conn is not None:
             global avg_user_resonance, _resonance_samples
-            if _resonance_samples == 0:
+            if _resonance_samples == 0 and user_lines:
                 res_vals = [compute_metrics(line)[2] for line in user_lines]
                 if res_vals:
                     avg_user_resonance = sum(res_vals) / len(res_vals)
                     _resonance_samples = len(res_vals)
             insert_prob = 0.25 + min(avg_user_resonance / 4, 0.5)
             if random.random() < insert_prob:
-                total = sum(user_weights)
-                if total > 0:
-                    prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
-                else:
-                    prefix = random.choice(user_lines)
-                _, _, res_val = compute_metrics(prefix)
-                logging.debug(
-                    "Prefix resonance %.3f (avg %.3f)", res_val, avg_user_resonance
-                )
-                avg_user_resonance = (
-                    avg_user_resonance * _resonance_samples + res_val
-                ) / (_resonance_samples + 1)
-                _resonance_samples += 1
+                res_val = 0.0
+                if db_conn is not None and (not user_lines or random.random() < 0.5):
+                    archived = await get_random_archived_line()
+                    if archived:
+                        prefix, res_val = archived
+                if prefix is None and user_lines:
+                    total = sum(user_weights)
+                    if total > 0:
+                        prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
+                    else:
+                        prefix = random.choice(user_lines)
+                    _, _, res_val = compute_metrics(prefix)
+                if prefix is not None:
+                    logging.debug(
+                        "Prefix resonance %.3f (avg %.3f)", res_val, avg_user_resonance
+                    )
+                    avg_user_resonance = (
+                        avg_user_resonance * _resonance_samples + res_val
+                    ) / (_resonance_samples + 1)
+                    _resonance_samples += 1
         available = MAX_MESSAGE_LENGTH - (len(prefix) + 2 if prefix else 0)
         if len(chunk) > available:
             split_pos = chunk.rfind(" ", 0, available)

@@ -30,6 +30,11 @@ def test_threshold_bytes_from_config(tmp_path, monkeypatch):
     assert molly.THRESHOLD_BYTES == 4096
 
 
+def test_max_user_lines_none(monkeypatch):
+    monkeypatch.setenv("MAX_USER_LINES", "None")
+    assert molly.get_max_user_lines() is None
+
+
 def test_compute_metrics():
     line = "Love and hate 123 123"
     entropy, perplexity, resonance = molly.compute_metrics(line)
@@ -115,15 +120,31 @@ def test_archive_user_lines(tmp_path, monkeypatch):
     async def runner():
         lines_file = tmp_path / "lines.txt"
         lines_file.write_text("a\nb\nc\n", encoding="utf-8")
+        db_path = tmp_path / "lines.db"
         monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
         molly.user_lines[:] = ["a", "b", "c"]
         molly.user_weights[:] = [1.0, 2.0, 3.0]
+        molly.db_conn = None
+        await molly.init_db()
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.executemany(
+                "INSERT INTO lines(line, entropy, perplexity, resonance, created_at) VALUES (?,0,0,0,\"now\")",
+                [("a",), ("b",), ("c",)],
+            )
+            await conn.commit()
         await molly.archive_user_lines(max_lines=2)
         archive_file = lines_file.with_name("lines.archive.txt")
         assert molly.user_lines == ["b", "c"]
         assert molly.user_weights == [2.0, 3.0]
         assert lines_file.read_text(encoding="utf-8") == "b\nc\n"
         assert archive_file.read_text(encoding="utf-8") == "a\n"
+        async with aiosqlite.connect(db_path) as conn:
+            cur = await conn.execute("SELECT line FROM archived_lines")
+            rows = [r[0] for r in await cur.fetchall()]
+            assert rows == ["a"]
+        await molly.db_conn.close()
+        molly.db_conn = None
 
     asyncio.run(runner())
 
@@ -349,6 +370,56 @@ def test_send_chunk_does_not_store_unsent(tmp_path, monkeypatch):
         assert not lines_file.exists()
         assert molly.user_lines == []
 
+        await molly.db_conn.close()
+        molly.db_conn = None
+
+    asyncio.run(runner())
+
+
+def test_send_chunk_uses_archived_prefix(tmp_path, monkeypatch):
+    class DummyBot:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send_message(self, chat_id: int, text: str) -> None:
+            self.sent.append(text)
+
+        async def send_chat_action(self, chat_id: int, action: object) -> None:  # pragma: no cover
+            pass
+
+    class DummyApp:
+        def __init__(self, bot: DummyBot) -> None:
+            self.bot = bot
+
+    async def runner():
+        db_path = tmp_path / "lines.db"
+        lines_file = tmp_path / "lines.txt"
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        molly.db_conn = None
+        await molly.init_db()
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute(
+                "INSERT INTO archived_lines(line, entropy, perplexity, resonance, archived_at) VALUES ('arch',0,0,0,'now')"
+            )
+            await conn.commit()
+        async def no_store(_: str) -> float:
+            return 0.0
+        async def no_typing(*args, **kwargs) -> None:
+            return None
+        def no_schedule(*args, **kwargs) -> None:
+            return None
+        monkeypatch.setattr(molly, "_store_line", no_store)
+        monkeypatch.setattr(molly, "simulate_typing", no_typing)
+        monkeypatch.setattr(molly, "schedule_next_message", no_schedule)
+        molly.user_lines[:] = []
+        molly.user_weights[:] = []
+        state = molly.ChatState(generator=iter(["base"]))
+        monkeypatch.setattr(molly.random, "random", lambda: 0.0)
+        bot = DummyBot()
+        app = DummyApp(bot)
+        await molly.send_chunk(app, 1, state)
+        assert bot.sent == ["arch base"]
         await molly.db_conn.close()
         molly.db_conn = None
 
