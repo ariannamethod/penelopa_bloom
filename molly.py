@@ -45,6 +45,8 @@ db_conn: sqlite3.Connection | None = None
 # Stored user lines and their weights
 user_lines: list[str] = []
 user_weights: list[float] = []
+# Background tasks to cancel on shutdown
+background_tasks: list[asyncio.Task] = []
 
 
 def load_user_lines() -> tuple[list[str], list[float]]:
@@ -312,12 +314,9 @@ async def cleanup_chat_states() -> None:
             del chat_states[chat_id]
         await asyncio.sleep(CLEANUP_INTERVAL)
 
-
-async def close_db(app: Application) -> None:
-    """Close the global database connection."""
-    if db_conn is not None:
-        db_conn.close()
-
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log unexpected errors during update handling."""
+    logging.exception("Unhandled exception", exc_info=context.error)
 
 async def monologue(app: Application, chat_id: int) -> None:
     state = chat_states.setdefault(chat_id, ChatState())
@@ -385,20 +384,28 @@ def main() -> None:
     init_db()
 
     async def post_init(app: Application) -> None:
-        asyncio.create_task(cleanup_chat_states())
-        asyncio.create_task(monitor_repo())
+        background_tasks.append(asyncio.create_task(cleanup_chat_states()))
+        background_tasks.append(asyncio.create_task(monitor_repo()))
+
+    async def shutdown(app: Application) -> None:
+        for task in background_tasks:
+            task.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+        if db_conn is not None:
+            db_conn.close()
 
     app = (
         Application.builder()
         .token(token)
         .post_init(post_init)
-        .post_shutdown(close_db)
+        .post_shutdown(shutdown)
         .build()
     )
     app.add_handler(CommandHandler('start', start))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
+    app.add_error_handler(error_handler)
     app.run_polling()
 
 # Repository change tracking and fine-tuning utilities
