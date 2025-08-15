@@ -9,6 +9,16 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 import molly  # noqa: E402
 
 
+def test_threshold_bytes_from_env(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("FINE_TUNE_THRESHOLD", "2048")
+    importlib.reload(molly)
+    assert molly.THRESHOLD_BYTES == 2048
+    monkeypatch.delenv("FINE_TUNE_THRESHOLD", raising=False)
+    importlib.reload(molly)
+
+
 def test_compute_metrics():
     line = "Love and hate 123 123"
     entropy, perplexity, resonance = molly.compute_metrics(line)
