@@ -32,6 +32,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 load_dotenv()
 
@@ -128,23 +129,7 @@ async def init_db() -> None:
         logging.exception("Failed to initialize lines database")
 
 
-POSITIVE_WORDS = {
-    'love',
-    'happy',
-    'joy',
-    'yes',
-    'good',
-    'hope',
-    'dream',
-}
-NEGATIVE_WORDS = {
-    'no',
-    'sad',
-    'bad',
-    'fear',
-    'hate',
-    'dark',
-}
+_sentiment_analyzer = SentimentIntensityAnalyzer()
 
 
 def compute_metrics(line: str) -> tuple[float, float, float]:
@@ -156,11 +141,9 @@ def compute_metrics(line: str) -> tuple[float, float, float]:
     probs = [c / total for c in counts.values()]
     entropy = -sum(p * math.log2(p) for p in probs)
     perplexity = 2 ** entropy
-    pos = sum(t in POSITIVE_WORDS for t in tokens)
-    neg = sum(t in NEGATIVE_WORDS for t in tokens)
-    emotion_score = pos - neg
+    sentiment_score = _sentiment_analyzer.polarity_scores(line)["compound"]
     num_count = sum(t.isdigit() for t in tokens)
-    resonance = abs(emotion_score) + num_count
+    resonance = abs(sentiment_score) + num_count
     return entropy, perplexity, resonance
 
 

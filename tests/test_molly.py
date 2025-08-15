@@ -28,7 +28,10 @@ def test_compute_metrics():
     expected_perplexity = 2 ** expected_entropy
     assert math.isclose(entropy, expected_entropy, rel_tol=1e-5)
     assert math.isclose(perplexity, expected_perplexity, rel_tol=1e-5)
-    assert resonance == 2
+    compound = molly._sentiment_analyzer.polarity_scores(line)["compound"]
+    num_count = sum(t.isdigit() for t in line.split())
+    expected_resonance = abs(compound) + num_count
+    assert math.isclose(resonance, expected_resonance, rel_tol=1e-5)
 
 
 def test_compute_delay_respects_daily_target(monkeypatch):
@@ -50,7 +53,7 @@ def test_split_and_select(monkeypatch):
     assert fragments == ["Good day", "Bad night", "123 456 789"]
     selected = molly.select_prefix_fragments(fragments)
     lines = [line for line, _ in selected]
-    assert lines == ["123 456 789", "Good day"]
+    assert lines == ["123 456 789", "Bad night"]
 
 
 def test_split_fragments_metrics():
