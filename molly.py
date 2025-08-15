@@ -43,6 +43,9 @@ ORIGIN_TEXT = Path('origin/molly.md')
 LINES_FILE = Path('origin/logs/lines.txt')
 DB_PATH = Path('origin/logs/lines.db')
 
+config = configparser.ConfigParser()
+config.read("config.ini")
+
 
 def get_max_user_lines() -> int | None:
     """Return the configured maximum number of user lines."""
@@ -53,18 +56,24 @@ def get_max_user_lines() -> int | None:
         return None
 
 
-def _read_threshold_from_config() -> str | None:
-    config = configparser.ConfigParser()
-    config.read("config.ini")
-    return config.get("DEFAULT", "threshold_bytes", fallback=None)
-
-
 CHANGELOG_DB = 'penelopa.db'
-_threshold = os.getenv("THRESHOLD_BYTES") or _read_threshold_from_config()
+_threshold = os.getenv("THRESHOLD_BYTES") or config.get("DEFAULT", "threshold_bytes", fallback=None)
 try:
     THRESHOLD_BYTES = int(_threshold) if _threshold else 100 * 1024
 except ValueError:  # pragma: no cover - invalid values treated as default
     THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
+
+_daily_target_min = os.getenv("DAILY_TARGET_MIN") or config.get("DEFAULT", "daily_target_min", fallback="10")
+_daily_target_max = os.getenv("DAILY_TARGET_MAX") or config.get("DEFAULT", "daily_target_max", fallback="12")
+try:
+    DAILY_TARGET_MIN = int(_daily_target_min)
+except ValueError:
+    DAILY_TARGET_MIN = 10
+try:
+    DAILY_TARGET_MAX = int(_daily_target_max)
+except ValueError:
+    DAILY_TARGET_MAX = 12
+
 MAX_MESSAGE_LENGTH = 4096
 
 # Sentiment analyzer and small language model for metrics
@@ -87,6 +96,11 @@ user_weights: list[float] = []
 # Rolling resonance stats for user lines
 avg_user_resonance: float = 0.0
 _resonance_samples: int = 0
+# Global averages across all interactions
+global_avg_entropy: float = 0.0
+global_avg_perplexity: float = 0.0
+global_avg_resonance: float = 0.0
+_metric_samples: int = 0
 # Background tasks to cancel on shutdown
 background_tasks: list[asyncio.Task] = []
 
@@ -331,10 +345,10 @@ class ChatState:
     last_activity: datetime = field(
         default_factory=lambda: datetime.now(UTC)
     )
-    daily_target: int = field(default_factory=lambda: random.randint(8, 10))
+    daily_target: int = field(
+        default_factory=lambda: random.randint(DAILY_TARGET_MIN, DAILY_TARGET_MAX)
+    )
     messages_today: int = 0
-    avg_entropy: float = 0.0
-    avg_perplexity: float = 0.0
     last_reset: datetime = field(default_factory=lambda: datetime.now(UTC))
     next_delay: float = 3600.0
     message_task: asyncio.Task | None = None
@@ -371,14 +385,32 @@ def compute_delay(
     )
 
 
-def adjust_daily_target(state: ChatState, entropy: float, perplexity: float) -> None:
-    count = state.messages_today
-    state.avg_entropy = (state.avg_entropy * count + entropy) / (count + 1)
-    state.avg_perplexity = (state.avg_perplexity * count + perplexity) / (count + 1)
-    if state.avg_entropy < 5 and state.avg_perplexity < 30:
-        state.daily_target = min(10, state.daily_target + 1)
-    elif state.avg_entropy > 7 or state.avg_perplexity > 100:
-        state.daily_target = max(8, state.daily_target - 1)
+def adjust_daily_target(
+    state: ChatState, entropy: float, perplexity: float, resonance: float
+) -> None:
+    global global_avg_entropy, global_avg_perplexity, global_avg_resonance, _metric_samples
+    _metric_samples += 1
+    global_avg_entropy = (
+        global_avg_entropy * (_metric_samples - 1) + entropy
+    ) / _metric_samples
+    global_avg_perplexity = (
+        global_avg_perplexity * (_metric_samples - 1) + perplexity
+    ) / _metric_samples
+    global_avg_resonance = (
+        global_avg_resonance * (_metric_samples - 1) + resonance
+    ) / _metric_samples
+    if (
+        entropy > global_avg_entropy
+        and perplexity > global_avg_perplexity
+        and resonance > global_avg_resonance
+    ):
+        state.daily_target = min(state.daily_target + 1, DAILY_TARGET_MAX + 2)
+    elif (
+        entropy < global_avg_entropy
+        and perplexity < global_avg_perplexity
+        and resonance < global_avg_resonance
+    ):
+        state.daily_target = max(state.daily_target - 1, DAILY_TARGET_MIN - 2)
 
 
 async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
@@ -450,10 +482,8 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
             if state.last_reset.date() != now.date():
                 state.last_reset = now
                 state.messages_today = 0
-                state.daily_target = random.randint(8, 10)
-                state.avg_entropy = 0.0
-                state.avg_perplexity = 0.0
-            adjust_daily_target(state, entropy, perplexity)
+                state.daily_target = random.randint(DAILY_TARGET_MIN, DAILY_TARGET_MAX)
+            adjust_daily_target(state, entropy, perplexity, resonance)
             state.messages_today += 1
             if state.messages_today >= state.daily_target:
                 tomorrow = datetime.combine((now + timedelta(days=1)).date(), time.min, tzinfo=UTC)

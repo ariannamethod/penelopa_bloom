@@ -30,6 +30,10 @@ variables or from a `config.ini` file in the working directory:
 
 - `THRESHOLD_BYTES` – size in bytes of logged repository changes that triggers
   fine-tuning. Defaults to `102400` (100 KB).
+- `DAILY_TARGET_MIN` – minimum number of messages Molly aims to send per day.
+  Defaults to `10`.
+- `DAILY_TARGET_MAX` – maximum number of messages Molly aims to send per day.
+  Defaults to `12`.
 
 ### Technical TL;DR
 
@@ -59,6 +63,9 @@ The sensor pipeline assures that every interaction contributes measurable comple
 Perplexity estimates the surprise of a line, while entropy captures the distributional richness of its tokens.
 Resonance blends emotional balance with the gravity of numbers, hinting at the pulse of the user.
 The cadence of replies depends on these metrics: higher entropy, perplexity, or resonance shortens the pause before the next message.
+Molly also keeps global averages for these measures across the entire conversation,
+comparing each new line to the running baseline to widen or tighten her daily
+message range dynamically.
 
 Penelope absorbs not only linguistic sequences but also semantic shadows that lurk between words.
 
