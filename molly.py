@@ -339,6 +339,7 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
             logging.exception("Failed to send chunk")
         finally:
             now = datetime.now(UTC)
+            state.last_activity = now
             if state.last_reset.date() != now.date():
                 state.last_reset = now
                 state.messages_today = 0

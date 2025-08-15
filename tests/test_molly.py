@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 import math
 import asyncio
+from datetime import datetime, timedelta
 import pytest
 import aiosqlite
 
@@ -67,3 +68,54 @@ def test_trim_user_lines(tmp_path, monkeypatch):
     assert molly.user_lines == ["b", "c"]
     assert molly.user_weights == [2.0, 3.0]
     assert lines_file.read_text(encoding="utf-8") == "b\nc\n"
+
+
+def test_automatic_messages_preserve_state(monkeypatch):
+    async def runner():
+        chat_id = 123
+        state = molly.ChatState()
+        state.generator = iter(["hi"])
+        state.last_activity = datetime.now(molly.UTC) - timedelta(
+            seconds=molly.STALE_AFTER + 1
+        )
+        molly.chat_states[chat_id] = state
+
+        class DummyBot:
+            async def send_message(self, chat_id, text):
+                pass
+
+        class DummyApp:
+            bot = DummyBot()
+
+        async def no_typing(bot, chat_id, delay):
+            pass
+
+        async def no_store(line):
+            pass
+
+        monkeypatch.setattr(molly, "simulate_typing", no_typing)
+        monkeypatch.setattr(molly, "_store_line", no_store)
+        monkeypatch.setattr(
+            molly, "schedule_next_message", lambda app, chat_id, state, delay=None: None
+        )
+
+        now = datetime.now(molly.UTC)
+        assert (now - state.last_activity).total_seconds() > molly.STALE_AFTER
+
+        await molly.send_chunk(DummyApp(), chat_id, state)
+
+        now = datetime.now(molly.UTC)
+        stale = [
+            cid
+            for cid, st in list(molly.chat_states.items())
+            if (now - st.last_activity).total_seconds() > molly.STALE_AFTER
+        ]
+        for cid in stale:
+            del molly.chat_states[cid]
+
+        try:
+            assert chat_id in molly.chat_states
+        finally:
+            molly.chat_states.clear()
+
+    asyncio.run(runner())
