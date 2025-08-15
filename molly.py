@@ -396,9 +396,11 @@ def main() -> None:
     async def shutdown(app: Application) -> None:
         for task in background_tasks:
             task.cancel()
-        await asyncio.gather(*background_tasks, return_exceptions=True)
-        if db_conn is not None:
-            db_conn.close()
+        try:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+        finally:
+            if db_conn is not None:
+                db_conn.close()
 
     app = (
         Application.builder()
@@ -471,30 +473,36 @@ async def monitor_repo() -> None:
     prev_commit = ""
     conn = sqlite3.connect(CHANGELOG_DB)
     init_change_db(conn)
-    while True:
-        try:
-            current_commit = get_current_commit()
-            if not current_commit:
-                await asyncio.sleep(300)
-                continue
-            if prev_commit and current_commit != prev_commit:
-                diff = get_diff(prev_commit, current_commit)
-                repo_hash = repo_sha256(current_commit)
-                conn.execute(
-                    "INSERT INTO changes (commit_hash, repo_hash, diff, size, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (
-                        current_commit,
-                        repo_hash,
-                        diff,
-                        len(diff.encode('utf-8')),
-                        datetime.now(UTC).isoformat(),
-                    ),
-                )
-                conn.commit()
-            prev_commit = current_commit
-        except Exception:
-            logging.exception("Failed to monitor repository changes")
-        await asyncio.sleep(300)
+    try:
+        while True:
+            try:
+                current_commit = get_current_commit()
+                if not current_commit:
+                    await asyncio.sleep(300)
+                    continue
+                if prev_commit and current_commit != prev_commit:
+                    diff = get_diff(prev_commit, current_commit)
+                    repo_hash = repo_sha256(current_commit)
+                    conn.execute(
+                        "INSERT INTO changes (commit_hash, repo_hash, diff, size, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (
+                            current_commit,
+                            repo_hash,
+                            diff,
+                            len(diff.encode('utf-8')),
+                            datetime.now(UTC).isoformat(),
+                        ),
+                    )
+                    conn.commit()
+                prev_commit = current_commit
+            except Exception:
+                logging.exception("Failed to monitor repository changes")
+            await asyncio.sleep(300)
+    except asyncio.CancelledError:
+        logging.info("monitor_repo task cancelled")
+        raise
+    finally:
+        conn.close()
 
 
 def get_last_commit(conn: sqlite3.Connection) -> str | None:
