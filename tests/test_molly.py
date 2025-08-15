@@ -547,3 +547,34 @@ def test_run_ullyses_nonblocking(monkeypatch):
 
     asyncio.run(runner())
     assert order.index('side') < order.index('proc_end')
+
+
+def test_reload_restores_insert_queue(tmp_path, monkeypatch):
+    async def runner():
+        db_path = tmp_path / "lines.db"
+        lines_file = tmp_path / "lines.txt"
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        molly.user_lines.clear()
+        molly.user_weights.clear()
+        molly.db_conn = None
+        await molly.init_db()
+        await molly.store_line("first")
+        await molly.store_line("second")
+        await molly.db_conn.close()
+        molly.db_conn = None
+
+        importlib.reload(molly)
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+
+        assert molly.user_lines == []
+        assert molly.user_weights == []
+
+        lines, weights = await molly.load_user_lines()
+        molly.user_lines, molly.user_weights = lines, weights
+
+        assert molly.user_lines == ["first", "second"]
+        assert len(molly.user_weights) == 2
+
+    asyncio.run(runner())
