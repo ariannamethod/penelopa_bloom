@@ -295,8 +295,10 @@ class ChatState:
     last_activity: datetime = field(
         default_factory=lambda: datetime.now(UTC)
     )
-    daily_target: int = field(default_factory=lambda: random.randint(4, 7))
+    daily_target: int = field(default_factory=lambda: random.randint(8, 10))
     messages_today: int = 0
+    avg_entropy: float = 0.0
+    avg_perplexity: float = 0.0
     last_reset: datetime = field(default_factory=lambda: datetime.now(UTC))
     next_delay: float = 3600.0
     message_task: asyncio.Task | None = None
@@ -312,10 +314,21 @@ STALE_AFTER = 3600
 
 
 def compute_delay(state: ChatState, entropy: float, perplexity: float) -> float:
-    base_interval = 86400 / state.daily_target
+    target = max(1, state.daily_target)
+    base_interval = 86400 / target
     entropy_factor = 1 + (10 - min(entropy, 10)) / 10
     perplexity_factor = 1 + 1 / (perplexity + 1)
     return base_interval * entropy_factor * perplexity_factor * random.uniform(0.5, 1.5)
+
+
+def adjust_daily_target(state: ChatState, entropy: float, perplexity: float) -> None:
+    count = state.messages_today
+    state.avg_entropy = (state.avg_entropy * count + entropy) / (count + 1)
+    state.avg_perplexity = (state.avg_perplexity * count + perplexity) / (count + 1)
+    if state.avg_entropy < 5 and state.avg_perplexity < 30:
+        state.daily_target = min(10, state.daily_target + 1)
+    elif state.avg_entropy > 7 or state.avg_perplexity > 100:
+        state.daily_target = max(8, state.daily_target - 1)
 
 
 async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
@@ -363,7 +376,10 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
             if state.last_reset.date() != now.date():
                 state.last_reset = now
                 state.messages_today = 0
-                state.daily_target = random.randint(4, 7)
+                state.daily_target = random.randint(8, 10)
+                state.avg_entropy = 0.0
+                state.avg_perplexity = 0.0
+            adjust_daily_target(state, entropy, perplexity)
             state.messages_today += 1
             if state.messages_today >= state.daily_target:
                 tomorrow = datetime.combine((now + timedelta(days=1)).date(), time.min, tzinfo=UTC)
