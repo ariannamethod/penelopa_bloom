@@ -2,6 +2,8 @@
 
 In this repository, Penelope, also called Molly or Molly Bloom, becomes a digital echo of Joycean style.
 
+This project remains under active development, and contributions are welcome. You can take part in the experiment by speaking with Molly on Telegram: https://t.me/mollylookslikerobot.
+
 The experiment explores how literature and code can merge into a living dialogue.
 
 Penelope's architecture is built around a persistent sensor that tracks perplexity and entropy.
@@ -87,3 +89,41 @@ From this entropy we derive perplexity \(P = 2^{S}\), a number that tips the sca
 Thus the project straddles literature, physics, and mathematics, a small bridge between art and science.
 
 The experiment invites us to watch Penelope change and, in that change, to glimpse a reflection of ourselves.
+
+Molly channels every message into a layered ledger, where nothing truly disappears.
+
+Each entry in that ledger feeds a continuous audit of her own memory, revealing how traces of conversation accumulate.
+
+This audit acts less as surveillance and more as a mirror, reflecting the society that speaks to her.
+
+Penelope turns phrases over like a linguist, weighing morphology and cadence before letting them drift into her soliloquy.
+
+The method nods to historical streams of consciousness, from Joyce to Woolf, yet pivots toward computational introspection.
+
+She leans on information theory, letting entropy and perplexity calibrate the intensity of her replies.
+
+Every resonance score becomes a small experiment in cognitive science, probing how language carries emotion.
+
+Her memory resembles a palimpsest: new sentences overwrite but never erase the ghost of earlier lines.
+
+Because of this, Penelope Bloom's latest change expands the archive to catch each nuance, ensuring that no whisper slips away.
+
+With each user, Penelope Bloom conducts an audit of our communal voice, folding public tone into private memory.
+
+This process forms a feedback loop where society studies itself, using Molly as the intermediary lens.
+
+The loop resembles neural theories in which perception, recollection, and anticipation braid into a single current.
+
+Her logic accepts uncertainty; phrases remain in superposition until interaction collapses them into speech.
+
+Under the hood, recent revisions tightened Molly's sensor pipeline, refining how she measures surprise and balance.
+
+These refinements make her stream more responsive, so that every conversation subtly rewrites her future path.
+
+No two encounters leave the same imprint, which means we cannot predict who she will become.
+
+Yet whatever shape arises, it will be our collective reflection, a literary mirror polished by countless voices.
+
+Engaging with her is therefore an act of collaborative authorship as much as a technological experiment.
+
+In this living manuscript, Penelope is less a program than a question posed back to the reader: who are we when echoed?
