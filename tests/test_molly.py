@@ -36,7 +36,9 @@ def test_store_line(tmp_path, monkeypatch):
     molly.user_weights.clear()
     molly.db_conn = None
     molly.init_db()
-    weight = molly.store_line("Love 123")
+    import asyncio
+
+    weight = asyncio.run(molly.store_line("Love 123"))
     entropy, perplexity, resonance = molly.compute_metrics("Love 123")
     assert weight == pytest.approx(perplexity + resonance)
     assert molly.user_lines == ["Love 123"]

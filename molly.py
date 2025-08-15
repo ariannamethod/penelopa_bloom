@@ -443,6 +443,7 @@ def main() -> None:
     init_db()
 
     async def post_init(app: Application) -> None:
+        monitor_repo_once()
         background_tasks.append(asyncio.create_task(cleanup_chat_states()))
         background_tasks.append(asyncio.create_task(monitor_repo()))
 
