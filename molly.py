@@ -331,8 +331,8 @@ class ChatState:
 
 
 chat_states: dict[int, ChatState] = {}
-user_lines, user_weights = asyncio.run(load_user_lines())
-asyncio.set_event_loop(asyncio.new_event_loop())
+# Stored user lines are populated during asynchronous startup
+
 
 CLEANUP_INTERVAL = 60
 STALE_AFTER = 3600
@@ -472,6 +472,24 @@ async def monologue(app: Application, chat_id: int) -> None:
     schedule_next_message(app, chat_id, state)
 
 
+async def startup(app: Application) -> None:
+    await init_db()
+    global user_lines, user_weights
+    user_lines, user_weights = await load_user_lines()
+    background_tasks.append(asyncio.create_task(cleanup_chat_states()))
+    background_tasks.append(asyncio.create_task(monitor_repo()))
+
+
+async def shutdown(app: Application) -> None:
+    for task in background_tasks:
+        task.cancel()
+    try:
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+    finally:
+        if db_conn is not None:
+            await db_conn.close()
+
+
 def split_fragments(
     text: str,
     *,
@@ -591,24 +609,10 @@ def main() -> None:
             'TELEGRAM_TOKEN is not set. Provide your bot token via the '
             'TELEGRAM_TOKEN environment variable or a .env file.'
         )
-    async def post_init(app: Application) -> None:
-        await init_db()
-        background_tasks.append(asyncio.create_task(cleanup_chat_states()))
-        background_tasks.append(asyncio.create_task(monitor_repo()))
-
-    async def shutdown(app: Application) -> None:
-        for task in background_tasks:
-            task.cancel()
-        try:
-            await asyncio.gather(*background_tasks, return_exceptions=True)
-        finally:
-            if db_conn is not None:
-                await db_conn.close()
-
     app = (
         Application.builder()
         .token(token)
-        .post_init(post_init)
+        .post_init(startup)
         .post_shutdown(shutdown)
         .build()
     )

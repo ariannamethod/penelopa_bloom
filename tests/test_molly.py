@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 import math
 import asyncio
+import importlib
 import pytest
 import aiosqlite
 
@@ -310,6 +311,37 @@ def test_send_chunk_does_not_store_unsent(tmp_path, monkeypatch):
 
         await molly.db_conn.close()
         molly.db_conn = None
+
+    asyncio.run(runner())
+
+
+def test_startup_no_side_loop(tmp_path, monkeypatch):
+    async def runner() -> None:
+        mod = importlib.reload(molly)
+        monkeypatch.setattr(mod, "DB_PATH", tmp_path / "lines.db", raising=False)
+
+        async def fake_load() -> tuple[list[str], list[float]]:
+            return ["one"], [1.0]
+
+        async def fake_cleanup() -> None:
+            pass
+
+        async def fake_monitor() -> None:
+            pass
+
+        monkeypatch.setattr(mod, "load_user_lines", fake_load)
+        monkeypatch.setattr(mod, "cleanup_chat_states", fake_cleanup)
+        monkeypatch.setattr(mod, "monitor_repo", fake_monitor)
+        mod.user_lines.clear()
+        mod.user_weights.clear()
+        await mod.startup(None)
+        assert mod.user_lines == ["one"]
+        assert mod.user_weights == [1.0]
+        await asyncio.gather(*mod.background_tasks)
+        mod.background_tasks.clear()
+        if mod.db_conn is not None:
+            await mod.db_conn.close()
+            mod.db_conn = None
 
     asyncio.run(runner())
 
