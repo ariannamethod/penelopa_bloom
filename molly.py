@@ -387,12 +387,21 @@ def main() -> None:
 # Repository change tracking and fine-tuning utilities
 
 def get_current_commit() -> str:
-    """Return the current git commit hash."""
-    return (
-        subprocess.check_output(['git', 'rev-parse', 'HEAD'])
-        .decode('utf-8')
-        .strip()
-    )
+    """Return the current git commit hash.
+
+    If the repository is not available (e.g., when running from a
+    deployment where the ``.git`` directory is missing), gracefully
+    return an empty string instead of raising an exception.
+    """
+    try:
+        return (
+            subprocess.check_output(['git', 'rev-parse', 'HEAD'])
+            .decode('utf-8')
+            .strip()
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        logging.warning("Git repository not found; commit hash unavailable")
+        return ""
 
 
 def repo_sha256(commit_hash: str) -> str:
@@ -435,6 +444,9 @@ async def monitor_repo() -> None:
     while True:
         try:
             current_commit = get_current_commit()
+            if not current_commit:
+                await asyncio.sleep(300)
+                continue
             if prev_commit and current_commit != prev_commit:
                 diff = get_diff(prev_commit, current_commit)
                 repo_hash = repo_sha256(current_commit)
@@ -554,8 +566,11 @@ def fine_tune() -> None:
         conn.close()
 
 
-def monitor_repo() -> None:
+def monitor_repo_once() -> None:
     commit = get_current_commit()
+    if not commit:
+        logging.warning("Skipping repo monitoring; git commit not found")
+        return
     sha = repo_sha256(commit)
     try:
         with sqlite3.connect(CHANGELOG_DB) as conn:
