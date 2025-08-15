@@ -25,10 +25,11 @@ graph TD
 
 ### Configuration
 
-The application reads the following environment variable:
+The application reads the following configuration, either from environment
+variables or from a `config.ini` file in the working directory:
 
-- `FINE_TUNE_THRESHOLD` – size in bytes of logged repository changes that
-  triggers fine-tuning. Defaults to `102400` (100 KB).
+- `THRESHOLD_BYTES` – size in bytes of logged repository changes that triggers
+  fine-tuning. Defaults to `102400` (100 KB).
 
 ### Technical TL;DR
 
