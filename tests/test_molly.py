@@ -5,6 +5,7 @@ import asyncio
 import importlib
 import pytest
 import aiosqlite
+from datetime import datetime, UTC, timedelta
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 import molly  # noqa: E402
@@ -547,3 +548,55 @@ def test_run_ullyses_nonblocking(monkeypatch):
 
     asyncio.run(runner())
     assert order.index('side') < order.index('proc_end')
+
+
+def test_chat_state_persistence(tmp_path, monkeypatch):
+    async def runner():
+        db_path = tmp_path / "lines.db"
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        molly.db_conn = None
+        await molly.init_db()
+
+        state = molly.ChatState()
+        state.next_prefix = "hi"
+        state.next_insert_position = 0.4
+        state.last_activity = datetime.now(UTC)
+        state.daily_target = 9
+        state.messages_today = 2
+        state.avg_entropy = 1.0
+        state.avg_perplexity = 2.0
+        state.last_reset = datetime.now(UTC)
+        state.next_delay = 5.0
+        state.next_run = datetime.now(UTC) + timedelta(seconds=5)
+        state.awaiting_response = True
+        molly.chat_states[42] = state
+
+        await molly.save_chat_states()
+        molly.chat_states.clear()
+
+        scheduled: dict[int, float | None] = {}
+
+        def fake_schedule(app, chat_id, st, delay=None):
+            scheduled[chat_id] = delay
+
+        monkeypatch.setattr(molly, "schedule_next_message", fake_schedule)
+
+        class DummyApp:
+            pass
+
+        await molly.load_chat_states(DummyApp())
+
+        loaded = molly.chat_states[42]
+        assert loaded.next_prefix == "hi"
+        assert scheduled[42] is not None
+
+        async with aiosqlite.connect(db_path) as conn:
+            cursor = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE name='chat_state'"
+            )
+            assert await cursor.fetchone() is not None
+
+        await molly.db_conn.close()
+        molly.db_conn = None
+
+    asyncio.run(runner())

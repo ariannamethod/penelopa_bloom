@@ -146,6 +146,25 @@ async def init_db() -> None:
         await db_conn.execute(
             'CREATE INDEX IF NOT EXISTS idx_lines_created_at ON lines (created_at)'
         )
+        await db_conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS chat_state (
+                chat_id INTEGER PRIMARY KEY,
+                generator TEXT,
+                next_prefix TEXT,
+                next_insert_position REAL,
+                last_activity TEXT,
+                daily_target INTEGER,
+                messages_today INTEGER,
+                avg_entropy REAL,
+                avg_perplexity REAL,
+                last_reset TEXT,
+                next_delay REAL,
+                next_run TEXT,
+                awaiting_response INTEGER
+            )
+            '''
+        )
         await db_conn.commit()
     except Exception:
         logging.exception("Failed to initialize lines database")
@@ -337,6 +356,7 @@ class ChatState:
     avg_perplexity: float = 0.0
     last_reset: datetime = field(default_factory=lambda: datetime.now(UTC))
     next_delay: float = 3600.0
+    next_run: datetime | None = None
     message_task: asyncio.Task | None = None
     awaiting_response: bool = False
 
@@ -480,9 +500,106 @@ async def _delayed_message(app: Application, chat_id: int, state: ChatState, del
 def schedule_next_message(app: Application, chat_id: int, state: ChatState, delay: float | None = None) -> None:
     if delay is None:
         delay = state.next_delay
+    else:
+        state.next_delay = delay
     if state.message_task:
         state.message_task.cancel()
+    state.next_run = datetime.now(UTC) + timedelta(seconds=delay)
     state.message_task = asyncio.create_task(_delayed_message(app, chat_id, state, delay))
+
+
+async def save_chat_states() -> None:
+    if db_conn is None:
+        return
+    try:
+        async with db_lock:
+            await db_conn.execute('DELETE FROM chat_state')
+            for chat_id, state in chat_states.items():
+                gen = getattr(getattr(state.generator, 'gi_code', None), 'co_name', '')
+                await db_conn.execute(
+                    '''
+                    INSERT INTO chat_state (
+                        chat_id, generator, next_prefix, next_insert_position,
+                        last_activity, daily_target, messages_today, avg_entropy,
+                        avg_perplexity, last_reset, next_delay, next_run,
+                        awaiting_response
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        chat_id,
+                        gen,
+                        state.next_prefix,
+                        state.next_insert_position,
+                        state.last_activity.isoformat(),
+                        state.daily_target,
+                        state.messages_today,
+                        state.avg_entropy,
+                        state.avg_perplexity,
+                        state.last_reset.isoformat(),
+                        state.next_delay,
+                        state.next_run.isoformat() if state.next_run else None,
+                        int(state.awaiting_response),
+                    ),
+                )
+            await db_conn.commit()
+    except Exception:
+        logging.exception("Failed to save chat states")
+
+
+async def load_chat_states(app: Application) -> None:
+    if db_conn is None:
+        return
+    try:
+        async with db_lock:
+            cursor = await db_conn.execute(
+                '''
+                SELECT chat_id, generator, next_prefix, next_insert_position,
+                       last_activity, daily_target, messages_today, avg_entropy,
+                       avg_perplexity, last_reset, next_delay, next_run,
+                       awaiting_response
+                FROM chat_state
+                '''
+            )
+            rows = await cursor.fetchall()
+        now = datetime.now(UTC)
+        for (
+            chat_id,
+            generator,
+            next_prefix,
+            next_insert_position,
+            last_activity,
+            daily_target,
+            messages_today,
+            avg_entropy,
+            avg_perplexity,
+            last_reset,
+            next_delay,
+            next_run,
+            awaiting_response,
+        ) in rows:
+            state = ChatState()
+            state.generator = (
+                random_chunks() if generator == 'random_chunks' else text_chunks()
+            )
+            state.next_prefix = next_prefix
+            state.next_insert_position = next_insert_position
+            if last_activity:
+                state.last_activity = datetime.fromisoformat(last_activity)
+            state.daily_target = daily_target
+            state.messages_today = messages_today
+            state.avg_entropy = avg_entropy
+            state.avg_perplexity = avg_perplexity
+            if last_reset:
+                state.last_reset = datetime.fromisoformat(last_reset)
+            state.next_delay = next_delay
+            state.next_run = datetime.fromisoformat(next_run) if next_run else None
+            state.awaiting_response = bool(awaiting_response)
+            chat_states[chat_id] = state
+            if state.next_run:
+                delay = max(0, (state.next_run - now).total_seconds())
+                schedule_next_message(app, chat_id, state, delay)
+    except Exception:
+        logging.exception("Failed to load chat states")
 
 
 async def cleanup_chat_states() -> None:
@@ -517,11 +634,13 @@ async def startup(app: Application) -> None:
     await init_db()
     global user_lines, user_weights
     user_lines, user_weights = await load_user_lines()
+    await load_chat_states(app)
     background_tasks.append(asyncio.create_task(cleanup_chat_states()))
     background_tasks.append(asyncio.create_task(monitor_repo()))
 
 
 async def shutdown(app: Application) -> None:
+    await save_chat_states()
     for task in background_tasks:
         task.cancel()
     try:
