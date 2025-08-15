@@ -53,6 +53,11 @@ def get_max_user_lines() -> int | None:
         return None
 
 
+def should_restore_lines() -> bool:
+    """Return True if missing lines should be restored from backups."""
+    return os.getenv("RESTORE_MISSING_LINES", "").lower() in {"1", "true", "yes"}
+
+
 def _read_threshold_from_config() -> str | None:
     config = configparser.ConfigParser()
     config.read("config.ini")
@@ -149,6 +154,83 @@ async def init_db() -> None:
         await db_conn.commit()
     except Exception:
         logging.exception("Failed to initialize lines database")
+
+
+async def verify_line_counts(restore: bool = False) -> None:
+    """Compare stored line counts between the DB and text file."""
+    if db_conn is None:
+        logging.error("Database not initialized")
+        return
+
+    async with db_lock:
+        cur = await db_conn.execute('SELECT COUNT(*) FROM lines')
+        db_count = (await cur.fetchone() or (0,))[0]
+
+    def _count_file_lines(path: Path) -> int:
+        if not path.exists():
+            return 0
+        with path.open('r', encoding='utf-8') as f:
+            return sum(1 for _ in f)
+
+    file_count = await asyncio.to_thread(_count_file_lines, LINES_FILE)
+
+    if db_count == file_count:
+        return
+
+    logging.warning(
+        "Line count mismatch: db=%d file=%d", db_count, file_count
+    )
+
+    if not restore:
+        return
+
+    if db_count < file_count:
+        def _read_lines(path: Path) -> list[str]:
+            if not path.exists():
+                return []
+            with path.open('r', encoding='utf-8') as f:
+                return [line.rstrip('\n') for line in f]
+
+        lines = await asyncio.to_thread(_read_lines, LINES_FILE)
+        missing = lines[db_count:]
+        if not missing:
+            return
+        async with db_lock:
+            for line in missing:
+                entropy, perplexity, resonance = compute_metrics(line)
+                await db_conn.execute(
+                    '''
+                    INSERT INTO lines (
+                        line, entropy, perplexity, resonance, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        line,
+                        entropy,
+                        perplexity,
+                        resonance,
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+            await db_conn.commit()
+    else:
+        async with db_lock:
+            cur = await db_conn.execute(
+                'SELECT line FROM lines WHERE id > ? ORDER BY id', (file_count,)
+            )
+            rows = await cur.fetchall()
+
+        missing = [r[0] for r in rows]
+        if not missing:
+            return
+
+        def _append_lines(path: Path, lines: list[str]) -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open('a', encoding='utf-8') as f:
+                for line in lines:
+                    f.write(line + '\n')
+
+        await asyncio.to_thread(_append_lines, LINES_FILE, missing)
 
 
 @lru_cache(maxsize=1024)
@@ -515,6 +597,7 @@ async def monologue(app: Application, chat_id: int) -> None:
 
 async def startup(app: Application) -> None:
     await init_db()
+    await verify_line_counts(restore=should_restore_lines())
     global user_lines, user_weights
     user_lines, user_weights = await load_user_lines()
     background_tasks.append(asyncio.create_task(cleanup_chat_states()))

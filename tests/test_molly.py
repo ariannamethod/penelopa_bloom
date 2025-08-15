@@ -3,6 +3,7 @@ from pathlib import Path
 import math
 import asyncio
 import importlib
+import logging
 import pytest
 import aiosqlite
 
@@ -547,3 +548,43 @@ def test_run_ullyses_nonblocking(monkeypatch):
 
     asyncio.run(runner())
     assert order.index('side') < order.index('proc_end')
+
+
+def test_verify_line_counts_restores(tmp_path, monkeypatch, caplog):
+    async def runner():
+        db_path = tmp_path / "lines.db"
+        txt_path = tmp_path / "lines.txt"
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        monkeypatch.setattr(molly, "LINES_FILE", txt_path)
+        molly.db_conn = None
+        await molly.init_db()
+        txt_path.write_text("one\ntwo\n", encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            await molly.verify_line_counts(restore=True)
+        assert "Line count mismatch" in caplog.text
+        async with aiosqlite.connect(db_path) as conn:
+            cur = await conn.execute("SELECT line FROM lines ORDER BY id")
+            rows = await cur.fetchall()
+        assert [r[0] for r in rows] == ["one", "two"]
+
+    asyncio.run(runner())
+
+
+def test_verify_line_counts_no_restore(tmp_path, monkeypatch, caplog):
+    async def runner():
+        db_path = tmp_path / "lines.db"
+        txt_path = tmp_path / "lines.txt"
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        monkeypatch.setattr(molly, "LINES_FILE", txt_path)
+        molly.db_conn = None
+        await molly.init_db()
+        txt_path.write_text("one\n", encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            await molly.verify_line_counts(restore=False)
+        assert "Line count mismatch" in caplog.text
+        async with aiosqlite.connect(db_path) as conn:
+            cur = await conn.execute("SELECT COUNT(*) FROM lines")
+            count = (await cur.fetchone())[0]
+        assert count == 0
+
+    asyncio.run(runner())
