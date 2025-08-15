@@ -5,6 +5,7 @@ import re
 import sqlite3
 import logging
 import math
+import aiosqlite
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
@@ -40,8 +41,8 @@ CHANGELOG_DB = 'penelopa.db'
 THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
 MAX_MESSAGE_LENGTH = 4096
 
-# Global connection to be shared across threads
-db_conn: sqlite3.Connection | None = None
+# Global connection to be shared across coroutines
+db_conn: aiosqlite.Connection | None = None
 # Lock to serialize database access
 db_lock = asyncio.Lock()
 # Stored user lines and their weights
@@ -51,17 +52,16 @@ user_weights: list[float] = []
 background_tasks: list[asyncio.Task] = []
 
 
-def load_user_lines() -> tuple[list[str], list[float]]:
+async def load_user_lines() -> tuple[list[str], list[float]]:
     """Return previously stored user lines and weights."""
     if not DB_PATH.exists():
         return [], []
     try:
-        with sqlite3.connect(DB_PATH) as conn:
-            cur = conn.cursor()
-            cur.execute(
+        async with aiosqlite.connect(DB_PATH) as conn:
+            cursor = await conn.execute(
                 'SELECT line, perplexity, resonance FROM lines ORDER BY id'
             )
-            rows = cur.fetchall()
+            rows = await cursor.fetchall()
     except Exception:
         logging.exception("Failed to load user lines")
         return [], []
@@ -73,12 +73,12 @@ def load_user_lines() -> tuple[list[str], list[float]]:
     return lines, weights
 
 
-def init_db() -> None:
+async def init_db() -> None:
     """Ensure the SQLite database exists and initialize global connection."""
     global db_conn
     try:
-        db_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        db_conn.execute(
+        db_conn = await aiosqlite.connect(DB_PATH)
+        await db_conn.execute(
             '''
             CREATE TABLE IF NOT EXISTS lines (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,13 +91,12 @@ def init_db() -> None:
             '''
         )
         # Ensure new columns exist if database was created earlier
-        cur = db_conn.cursor()
-        cur.execute('PRAGMA table_info(lines)')
-        cols = [c[1] for c in cur.fetchall()]
+        cur = await db_conn.execute('PRAGMA table_info(lines)')
+        cols = [c[1] for c in await cur.fetchall()]
         for col in ('entropy', 'perplexity', 'resonance'):
             if col not in cols:
-                cur.execute(f'ALTER TABLE lines ADD COLUMN {col} REAL')
-        db_conn.commit()
+                await db_conn.execute(f'ALTER TABLE lines ADD COLUMN {col} REAL')
+        await db_conn.commit()
     except Exception:
         logging.exception("Failed to initialize lines database")
 
@@ -146,8 +145,7 @@ async def _store_line(line: str) -> float:
     entropy, perplexity, resonance = compute_metrics(line)
     try:
         async with db_lock:
-            await asyncio.to_thread(
-                db_conn.execute,
+            await db_conn.execute(
                 '''
                 INSERT INTO lines (
                     line, entropy, perplexity, resonance, created_at
@@ -161,7 +159,7 @@ async def _store_line(line: str) -> float:
                     datetime.now(UTC).isoformat(),
                 ),
             )
-            await asyncio.to_thread(db_conn.commit)
+            await db_conn.commit()
     except Exception:
         logging.exception("Failed to store line")
         return 0.0
@@ -292,7 +290,7 @@ class ChatState:
 
 
 chat_states: dict[int, ChatState] = {}
-user_lines, user_weights = load_user_lines()
+user_lines, user_weights = asyncio.run(load_user_lines())
 
 CLEANUP_INTERVAL = 60
 STALE_AFTER = 3600
@@ -471,9 +469,8 @@ def main() -> None:
             'TELEGRAM_TOKEN is not set. Provide your bot token via the '
             'TELEGRAM_TOKEN environment variable or a .env file.'
         )
-    init_db()
-
     async def post_init(app: Application) -> None:
+        await init_db()
         background_tasks.append(asyncio.create_task(cleanup_chat_states()))
         background_tasks.append(asyncio.create_task(monitor_repo()))
 
@@ -484,7 +481,7 @@ def main() -> None:
             await asyncio.gather(*background_tasks, return_exceptions=True)
         finally:
             if db_conn is not None:
-                db_conn.close()
+                await db_conn.close()
 
     app = (
         Application.builder()

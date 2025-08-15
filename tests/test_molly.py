@@ -1,9 +1,9 @@
 import sys
 from pathlib import Path
 import math
-import sqlite3
 import asyncio
 import pytest
+import aiosqlite
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 import molly  # noqa: E402
@@ -28,30 +28,33 @@ def test_prepare_lines(monkeypatch):
 
 
 def test_store_line(tmp_path, monkeypatch):
-    db_path = tmp_path / "lines.db"
-    lines_file = tmp_path / "lines.txt"
-    monkeypatch.setattr(molly, "DB_PATH", db_path)
-    monkeypatch.setattr(molly, "LINES_FILE", lines_file)
-    molly.user_lines.clear()
-    molly.user_weights.clear()
-    molly.db_conn = None
-    molly.init_db()
-    weight = asyncio.run(molly.store_line("Love 123"))
-    entropy, perplexity, resonance = molly.compute_metrics("Love 123")
-    assert weight == pytest.approx(perplexity + resonance)
-    assert molly.user_lines == ["Love 123"]
-    assert molly.user_weights == [pytest.approx(weight)]
-    assert lines_file.read_text(encoding="utf-8") == "Love 123\n"
-    with sqlite3.connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT line, entropy, perplexity, resonance FROM lines")
-        row = cur.fetchone()
-        assert row[0] == "Love 123"
-        assert row[1] == pytest.approx(entropy)
-        assert row[2] == pytest.approx(perplexity)
-        assert row[3] == pytest.approx(resonance)
-    molly.db_conn.close()
-    molly.db_conn = None
+    async def runner():
+        db_path = tmp_path / "lines.db"
+        lines_file = tmp_path / "lines.txt"
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        molly.user_lines.clear()
+        molly.user_weights.clear()
+        molly.db_conn = None
+        await molly.init_db()
+        weight = await molly.store_line("Love 123")
+        entropy, perplexity, resonance = molly.compute_metrics("Love 123")
+        assert weight == pytest.approx(perplexity + resonance)
+        assert molly.user_lines == ["Love 123"]
+        assert molly.user_weights == [pytest.approx(weight)]
+        assert lines_file.read_text(encoding="utf-8") == "Love 123\n"
+        async with aiosqlite.connect(db_path) as conn:
+            cursor = await conn.execute(
+                "SELECT line, entropy, perplexity, resonance FROM lines"
+            )
+            row = await cursor.fetchone()
+            assert row[0] == "Love 123"
+            assert row[1] == pytest.approx(entropy)
+            assert row[2] == pytest.approx(perplexity)
+            assert row[3] == pytest.approx(resonance)
+        await molly.db_conn.close()
+        molly.db_conn = None
+    asyncio.run(runner())
 
 
 def test_trim_user_lines(tmp_path, monkeypatch):
