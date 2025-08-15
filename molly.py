@@ -412,7 +412,9 @@ def get_current_commit() -> str:
     """
     try:
         return (
-            subprocess.check_output(['git', 'rev-parse', 'HEAD'])
+            subprocess.check_output(
+                ['git', 'rev-parse', 'HEAD'], stderr=subprocess.DEVNULL
+            )
             .decode('utf-8')
             .strip()
         )
