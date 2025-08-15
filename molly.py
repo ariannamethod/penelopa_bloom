@@ -527,9 +527,15 @@ def init_change_db(conn: sqlite3.Connection) -> None:
 
 
 async def monitor_repo() -> None:
+    """Watch the repository for changes and log them asynchronously.
+
+    Blocking operations are executed in a thread to avoid stalling the
+    event loop. For heavier workloads consider dedicating a separate thread
+    or process.
+    """
     prev_commit = ""
-    conn = sqlite3.connect(CHANGELOG_DB)
-    init_change_db(conn)
+    conn = await asyncio.to_thread(sqlite3.connect, CHANGELOG_DB)
+    await asyncio.to_thread(init_change_db, conn)
     try:
         while True:
             try:
@@ -538,9 +544,10 @@ async def monitor_repo() -> None:
                     await asyncio.sleep(300)
                     continue
                 if prev_commit and current_commit != prev_commit:
-                    diff = get_diff(prev_commit, current_commit)
-                    repo_hash = repo_sha256(current_commit)
-                    conn.execute(
+                    diff = await asyncio.to_thread(get_diff, prev_commit, current_commit)
+                    repo_hash = await asyncio.to_thread(repo_sha256, current_commit)
+                    await asyncio.to_thread(
+                        conn.execute,
                         "INSERT INTO changes (commit_hash, repo_hash, diff, size, created_at) VALUES (?, ?, ?, ?, ?)",
                         (
                             current_commit,
@@ -550,7 +557,7 @@ async def monitor_repo() -> None:
                             datetime.now(UTC).isoformat(),
                         ),
                     )
-                    conn.commit()
+                    await asyncio.to_thread(conn.commit)
                 prev_commit = current_commit
             except Exception:
                 logging.exception("Failed to monitor repository changes")
@@ -559,7 +566,7 @@ async def monitor_repo() -> None:
         logging.info("monitor_repo task cancelled")
         raise
     finally:
-        conn.close()
+        await asyncio.to_thread(conn.close)
 
 
 def get_last_commit(conn: sqlite3.Connection) -> str | None:
