@@ -452,11 +452,15 @@ def repo_sha256(commit_hash: str) -> str:
 
 def get_diff(prev_commit: str, current_commit: str) -> str:
     """Return git diff between two commits."""
-    if prev_commit:
-        diff_cmd = ['git', 'diff', prev_commit, current_commit]
-        return subprocess.check_output(diff_cmd).decode('utf-8')
-    show_cmd = ['git', 'show', current_commit]
-    return subprocess.check_output(show_cmd).decode('utf-8')
+    try:
+        if prev_commit:
+            diff_cmd = ['git', 'diff', prev_commit, current_commit]
+            return subprocess.check_output(diff_cmd).decode('utf-8')
+        show_cmd = ['git', 'show', current_commit]
+        return subprocess.check_output(show_cmd).decode('utf-8')
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        logging.warning("Unable to compute git diff: %s", exc)
+        return ""
 
 
 def init_change_db(conn: sqlite3.Connection) -> None:
