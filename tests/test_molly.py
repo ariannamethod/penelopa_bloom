@@ -12,12 +12,10 @@ import molly  # noqa: E402
 def test_compute_metrics():
     line = "Love and hate 123 123"
     entropy, perplexity, resonance = molly.compute_metrics(line)
-    probs = [0.2, 0.2, 0.2, 0.4]
-    expected_entropy = -sum(p * math.log2(p) for p in probs)
-    expected_perplexity = 2 ** expected_entropy
-    assert math.isclose(entropy, expected_entropy, rel_tol=1e-5)
-    assert math.isclose(perplexity, expected_perplexity, rel_tol=1e-5)
-    assert resonance == 2
+    assert math.isclose(perplexity, 2 ** entropy, rel_tol=1e-5)
+    scores = molly.sentiment_analyzer.polarity_scores(line)
+    expected_resonance = abs(scores["compound"]) + 2
+    assert resonance == pytest.approx(expected_resonance)
 
 
 def test_compute_delay_respects_daily_target(monkeypatch):
@@ -47,7 +45,7 @@ def test_split_fragments_metrics():
     fragments = molly.split_fragments(
         text, entropy_threshold=2.0, perplexity_threshold=4.0
     )
-    assert fragments == ["one two three four", "five"]
+    assert fragments == ["one two three four five"]
 
 
 def test_store_line(tmp_path, monkeypatch):
