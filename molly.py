@@ -179,9 +179,12 @@ def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
         return
     del user_lines[:-max_lines]
     del user_weights[:-max_lines]
-    with LINES_FILE.open('w', encoding='utf-8') as f:
-        for line in user_lines:
-            f.write(line + '\n')
+    with LINES_FILE.open("r+", encoding="utf-8") as f:
+        f.seek(0)
+        lines = f.readlines()
+        f.seek(0)
+        f.writelines(lines[-max_lines:])
+        f.truncate()
 
 
 def text_chunks() -> Iterator[str]:
@@ -406,7 +409,8 @@ async def handle_message(
     weights = []
     for line in lines:
         weights.append(await store_line(line))
-    trim_user_lines()
+    if len(user_lines) > MAX_USER_LINES:
+        trim_user_lines()
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
     if weights:
