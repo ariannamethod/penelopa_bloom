@@ -413,24 +413,58 @@ async def monologue(app: Application, chat_id: int) -> None:
     schedule_next_message(app, chat_id, state)
 
 
-def split_fragments(text: str) -> list[str]:
-    """Return all meaningful fragments from user text."""
+def split_fragments(
+    text: str,
+    *,
+    entropy_threshold: float = 2.0,
+    perplexity_threshold: float = 4.0,
+) -> list[str]:
+    """Return all meaningful fragments from user text.
+
+    The text is first split on punctuation. Each resulting piece is then
+    further segmented so that the entropy or perplexity of a fragment never
+    exceeds the supplied thresholds. Before returning, ``compute_metrics`` is
+    executed for every produced fragment to ensure metrics are calculated.
+    """
+
     raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
     fragments: list[str] = []
+
     for line in raw_lines:
-        parts = re.split(r'[.!?]+', line)
+        parts = re.split(r"[.!?]+", line)
         for part in parts:
-            cleaned = re.sub(r'[^\w\s]', '', part).strip()
-            if cleaned:
-                fragments.append(cleaned)
+            cleaned = re.sub(r"[^\w\s]", "", part).strip()
+            if not cleaned:
+                continue
+            words = cleaned.split()
+            current: list[str] = []
+            for word in words:
+                candidate = " ".join(current + [word])
+                entropy, perplexity, _ = compute_metrics(candidate)
+                if (
+                    entropy > entropy_threshold
+                    or perplexity > perplexity_threshold
+                ):
+                    if current:
+                        fragments.append(" ".join(current))
+                    current = [word]
+                else:
+                    current.append(word)
+            if current:
+                fragments.append(" ".join(current))
+
     if not fragments and raw_lines:
         for line in raw_lines:
             words = line.split()
             chunk = random.randint(6, 12)
             for i in range(0, len(words), chunk):
-                frag = ' '.join(words[i:i + chunk]).strip()
+                frag = " ".join(words[i : i + chunk]).strip()
                 if frag:
                     fragments.append(frag)
+
+    for frag in fragments:
+        compute_metrics(frag)
+
     return fragments
 
 
