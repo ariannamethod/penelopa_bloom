@@ -67,3 +67,47 @@ def test_trim_user_lines(tmp_path, monkeypatch):
     assert molly.user_lines == ["b", "c"]
     assert molly.user_weights == [2.0, 3.0]
     assert lines_file.read_text(encoding="utf-8") == "b\nc\n"
+
+
+def test_send_chunk_respects_limit(monkeypatch):
+    class DummyBot:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send_message(self, chat_id: int, text: str) -> None:
+            self.sent.append(text)
+
+        async def send_chat_action(self, chat_id: int, action: object) -> None:  # pragma: no cover
+            pass
+
+    class DummyApp:
+        def __init__(self, bot: DummyBot) -> None:
+            self.bot = bot
+
+    async def runner():
+        async def no_store(_: str) -> float:
+            return 0.0
+
+        async def no_typing(*args, **kwargs) -> None:
+            return None
+
+        def no_schedule(*args, **kwargs) -> None:
+            return None
+
+        monkeypatch.setattr(molly, "_store_line", no_store)
+        monkeypatch.setattr(molly, "simulate_typing", no_typing)
+        monkeypatch.setattr(molly, "schedule_next_message", no_schedule)
+
+        long_chunk = "word " * 1000
+        state = molly.ChatState(generator=iter([long_chunk]))
+        state.next_prefix = "prefix"
+
+        bot = DummyBot()
+        app = DummyApp(bot)
+
+        await molly.send_chunk(app, 1, state)
+
+        assert len(bot.sent) == 1
+        assert len(bot.sent[0]) <= molly.MAX_MESSAGE_LENGTH
+
+    asyncio.run(runner())
