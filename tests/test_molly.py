@@ -3,8 +3,10 @@ from pathlib import Path
 import math
 import asyncio
 import importlib
+import sqlite3
 import pytest
 import aiosqlite
+from datetime import UTC, datetime
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 import molly  # noqa: E402
@@ -438,11 +440,68 @@ def test_startup_no_side_loop(tmp_path, monkeypatch):
         monkeypatch.setattr(mod, "load_user_lines", fake_load)
         monkeypatch.setattr(mod, "cleanup_chat_states", fake_cleanup)
         monkeypatch.setattr(mod, "monitor_repo", fake_monitor)
+        monkeypatch.setattr(mod, "monitor_repo_once", lambda: None)
         mod.user_lines.clear()
         mod.user_weights.clear()
         await mod.startup(None)
         assert mod.user_lines == ["one"]
-        assert mod.user_weights == [1.0]
+        assert mod.user_weights == [1.0] 
+        await asyncio.gather(*mod.background_tasks)
+        mod.background_tasks.clear()
+        if mod.db_conn is not None:
+            await mod.db_conn.close()
+            mod.db_conn = None
+
+    asyncio.run(runner())
+
+
+def test_startup_syncs_log_lines(tmp_path, monkeypatch):
+    async def runner() -> None:
+        mod = importlib.reload(molly)
+        db_path = tmp_path / "lines.db"
+        log_path = tmp_path / "lines.txt"
+        monkeypatch.setattr(mod, "DB_PATH", db_path, raising=False)
+        monkeypatch.setattr(mod, "LINES_FILE", log_path, raising=False)
+
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE lines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                line TEXT,
+                entropy REAL,
+                perplexity REAL,
+                resonance REAL,
+                created_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO lines (line, entropy, perplexity, resonance, created_at) VALUES (?, 0, 0, 0, ?)",
+            ("foo", datetime.now(UTC).isoformat()),
+        )
+        conn.commit()
+        conn.close()
+
+        log_path.write_text("foo\nbar\n", encoding="utf-8")
+
+        async def fake_cleanup() -> None:
+            pass
+
+        async def fake_monitor() -> None:
+            pass
+
+        monkeypatch.setattr(mod, "cleanup_chat_states", fake_cleanup)
+        monkeypatch.setattr(mod, "monitor_repo", fake_monitor)
+        monkeypatch.setattr(mod, "monitor_repo_once", lambda: None)
+        mod.user_lines.clear()
+        mod.user_weights.clear()
+        await mod.startup(None)
+        assert mod.user_lines == ["foo", "bar"]
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("SELECT line FROM lines ORDER BY id")
+            rows = [row[0] for row in await cursor.fetchall()]
+        assert rows == ["foo", "bar"]
         await asyncio.gather(*mod.background_tasks)
         mod.background_tasks.clear()
         if mod.db_conn is not None:
