@@ -15,6 +15,7 @@ import hashlib
 import subprocess
 import tempfile
 import shutil
+import configparser
 
 from telegram import Update
 from telegram.constants import ChatAction
@@ -49,8 +50,16 @@ def get_max_user_lines() -> int | None:
         return int(_max_lines) if _max_lines else None
     except (TypeError, ValueError):  # pragma: no cover - invalid values treated as no limit
         return None
+
+
+def _read_threshold_from_config() -> str | None:
+    config = configparser.ConfigParser()
+    config.read("config.ini")
+    return config.get("DEFAULT", "threshold_bytes", fallback=None)
+
+
 CHANGELOG_DB = 'penelopa.db'
-_threshold = os.getenv("FINE_TUNE_THRESHOLD")
+_threshold = os.getenv("THRESHOLD_BYTES") or _read_threshold_from_config()
 try:
     THRESHOLD_BYTES = int(_threshold) if _threshold else 100 * 1024
 except ValueError:  # pragma: no cover - invalid values treated as default

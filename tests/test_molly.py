@@ -13,11 +13,21 @@ import molly  # noqa: E402
 def test_threshold_bytes_from_env(monkeypatch):
     import importlib
 
-    monkeypatch.setenv("FINE_TUNE_THRESHOLD", "2048")
+    monkeypatch.setenv("THRESHOLD_BYTES", "2048")
     importlib.reload(molly)
     assert molly.THRESHOLD_BYTES == 2048
-    monkeypatch.delenv("FINE_TUNE_THRESHOLD", raising=False)
+    monkeypatch.delenv("THRESHOLD_BYTES", raising=False)
     importlib.reload(molly)
+
+
+def test_threshold_bytes_from_config(tmp_path, monkeypatch):
+    import importlib
+
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("[DEFAULT]\nthreshold_bytes = 4096", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    importlib.reload(molly)
+    assert molly.THRESHOLD_BYTES == 4096
 
 
 def test_compute_metrics():
