@@ -208,15 +208,48 @@ def text_chunks() -> Iterator[str]:
 
 
 def random_chunks() -> Iterator[str]:
-    """Yield text chunks starting from a random position."""
-    chunks = list(text_chunks())
-    if not chunks:
+    """Yield text chunks starting from a random byte offset.
+
+    The file is read sequentially in blocks beginning at a random position.
+    When the end of the file is reached the reader wraps to the start and
+    continues until the starting offset is encountered again.
+    """
+
+    size = ORIGIN_TEXT.stat().st_size
+    if size == 0:
         return
-    start = random.randrange(len(chunks))
-    for chunk in chunks[start:]:
-        yield chunk
-    for chunk in chunks[:start]:
-        yield chunk
+
+    start = random.randrange(size)
+    block_size = MAX_MESSAGE_LENGTH
+
+    def block_iter() -> Iterator[str]:
+        with ORIGIN_TEXT.open("rb") as f:
+            f.seek(start)
+            remaining = size
+            while remaining > 0:
+                to_read = min(block_size, remaining)
+                data = f.read(to_read)
+                if not data:
+                    f.seek(0)
+                    continue
+                remaining -= len(data)
+                yield data.decode("utf-8", errors="ignore")
+
+    buffer = ""
+    for data in block_iter():
+        buffer += data
+        while len(buffer) >= MAX_MESSAGE_LENGTH:
+            split_pos = buffer.rfind(" ", 0, MAX_MESSAGE_LENGTH)
+            if split_pos == -1:
+                split_pos = buffer.find(" ", MAX_MESSAGE_LENGTH)
+                if split_pos == -1:
+                    break
+            chunk, buffer = buffer[:split_pos], buffer[split_pos + 1 :]
+            if chunk:
+                yield chunk
+    remainder = buffer.strip()
+    if remainder:
+        yield remainder
 
 
 async def simulate_typing(bot, chat_id: int, delay: int) -> None:
