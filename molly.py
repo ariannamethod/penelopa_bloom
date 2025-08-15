@@ -7,6 +7,7 @@ import logging
 import math
 import aiosqlite
 import sys
+import statistics
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -326,8 +327,7 @@ async def simulate_typing(bot, chat_id: int, delay: int) -> None:
 @dataclass
 class ChatState:
     generator: Iterator[str] = field(default_factory=text_chunks)
-    next_prefix: str | None = None
-    next_insert_position: float | None = None
+    next_prefixes: list[tuple[str, float]] = field(default_factory=list)
     last_activity: datetime = field(
         default_factory=lambda: datetime.now(UTC)
     )
@@ -393,10 +393,10 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
                 random_chunks() if gen_name == "random_chunks" else text_chunks()
             )
             chunk = next(state.generator)
-        prefix = None
-        if state.next_prefix:
-            prefix = state.next_prefix
-            state.next_prefix = None
+        prefixes: list[str] = []
+        if state.next_prefixes:
+            prefixes = [p for p, _ in state.next_prefixes]
+            state.next_prefixes = []
         elif user_lines:
             global avg_user_resonance, _resonance_samples
             if _resonance_samples == 0:
@@ -411,6 +411,7 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
                     prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
                 else:
                     prefix = random.choice(user_lines)
+                prefixes = [prefix]
                 _, _, res_val = compute_metrics(prefix)
                 logging.debug(
                     "Prefix resonance %.3f (avg %.3f)", res_val, avg_user_resonance
@@ -419,23 +420,35 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
                     avg_user_resonance * _resonance_samples + res_val
                 ) / (_resonance_samples + 1)
                 _resonance_samples += 1
-        available = MAX_MESSAGE_LENGTH - (len(prefix) + 2 if prefix else 0)
+        available = MAX_MESSAGE_LENGTH - sum(len(p) + 1 for p in prefixes)
         if len(chunk) > available:
             split_pos = chunk.rfind(" ", 0, available)
             if split_pos != -1:
                 chunk = chunk[:split_pos]
             else:
                 chunk = chunk[:available]
-        if prefix:
-            insert_ratio = (
-                state.next_insert_position
-                if state.next_insert_position is not None
-                else random.random()
-            )
-            insert_pos = int(insert_ratio * len(chunk))
-            parts = [chunk[:insert_pos].rstrip(), prefix, chunk[insert_pos:].lstrip()]
-            chunk = " ".join(part for part in parts if part)
-            state.next_insert_position = None
+        if prefixes:
+            res_vals = [compute_metrics(p)[2] for p in prefixes]
+            max_res = max(res_vals) if res_vals else 1.0
+            base_len = len(chunk)
+            inserts = []
+            for i, (pref, res) in enumerate(zip(prefixes, res_vals)):
+                base_ratio = (i + 1) / (len(prefixes) + 1)
+                r_norm = res / max_res if max_res else 0.0
+                ratio = base_ratio * (1 - r_norm) + 0.5 * r_norm
+                inserts.append((int(ratio * base_len), pref))
+            inserts.sort()
+            offset = 0
+            for pos, pref in inserts:
+                pos += offset
+                chunk = (
+                    chunk[:pos].rstrip()
+                    + (" " if chunk[:pos].rstrip() else "")
+                    + pref
+                    + (" " if chunk[pos:].lstrip() else "")
+                    + chunk[pos:].lstrip()
+                )
+                offset += len(pref) + 2
         entropy, perplexity, resonance = compute_metrics(chunk)
         delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
         await simulate_typing(app.bot, chat_id, delay)
@@ -541,9 +554,23 @@ def split_fragments(
 
     The text is first split on punctuation. Each resulting piece is then
     further segmented so that the entropy or perplexity of a fragment never
-    exceeds the supplied thresholds. Before returning, ``compute_metrics`` is
-    executed for every produced fragment to ensure metrics are calculated.
+    exceeds the supplied thresholds. When past user lines are available, the
+    thresholds are adjusted based on their statistics to adaptively tune
+    segmentation. Before returning, ``compute_metrics`` is executed for every
+    produced fragment to ensure metrics are calculated.
     """
+
+    if user_lines:
+        ent_vals = [compute_metrics(line)[0] for line in user_lines[-50:]]
+        per_vals = [compute_metrics(line)[1] for line in user_lines[-50:]]
+        if len(ent_vals) >= 2:
+            entropy_threshold = statistics.mean(ent_vals) + statistics.stdev(ent_vals)
+        elif ent_vals:
+            entropy_threshold = max(entropy_threshold, ent_vals[0])
+        if len(per_vals) >= 2:
+            perplexity_threshold = statistics.mean(per_vals) + statistics.stdev(per_vals)
+        elif per_vals:
+            perplexity_threshold = max(perplexity_threshold, per_vals[0])
 
     raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
     fragments: list[str] = []
@@ -587,15 +614,17 @@ def split_fragments(
 
 
 def select_prefix_fragments(fragments: list[str]) -> list[tuple[str, float]]:
-    """Pick the most resonant fragments to use as a prefix."""
+    """Pick the most resonant fragments to use as prefixes."""
     if not fragments:
         return []
     scored = [(line, compute_metrics(line)) for line in fragments]
     scored.sort(key=lambda x: x[1][1] + x[1][2], reverse=True)
-    lines_count = 2 if len(scored) <= 2 else random.randint(2, 3)
-    return [
-        (line, metrics[1] + metrics[2]) for line, metrics in scored[:lines_count]
-    ]
+    if len(scored) <= 3:
+        selected = scored
+    else:
+        lines_count = random.randint(3, min(5, len(scored)))
+        selected = scored[:lines_count]
+    return [(line, metrics[1] + metrics[2]) for line, metrics in selected]
 
 
 async def handle_message(
@@ -616,12 +645,7 @@ async def handle_message(
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
     if selected:
-        lines, weights = zip(*selected)
-        if sum(weights) > 0:
-            state.next_prefix = random.choices(lines, weights=weights, k=1)[0]
-        else:
-            state.next_prefix = random.choice(lines)
-        state.next_insert_position = random.random()
+        state.next_prefixes = selected
     state.last_activity = datetime.now(UTC)
     state.awaiting_response = True
     schedule_next_message(

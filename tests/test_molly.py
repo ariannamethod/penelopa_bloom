@@ -64,13 +64,14 @@ def test_compute_delay_respects_resonance(monkeypatch):
 
 
 def test_split_and_select(monkeypatch):
-    monkeypatch.setattr(molly.random, "randint", lambda a, b: 2)
+    monkeypatch.setattr(molly.random, "randint", lambda a, b: 3)
     text = "Good day! Bad night? 123 456 789."
     fragments = molly.split_fragments(text)
     assert fragments == ["Good day", "Bad night", "123 456 789"]
     selected = molly.select_prefix_fragments(fragments)
     lines = [line for line, _ in selected]
-    assert lines == ["123 456 789", "Good day"]
+    assert lines[0] == "123 456 789"
+    assert len(lines) == 3
 
 
 def test_split_fragments_metrics():
@@ -253,7 +254,7 @@ def test_send_chunk_respects_limit(monkeypatch):
 
         long_chunk = "word " * 1000
         state = molly.ChatState(generator=iter([long_chunk]))
-        state.next_prefix = "prefix"
+        state.next_prefixes = [("prefix", 1.0)]
 
         bot = DummyBot()
         app = DummyApp(bot)
@@ -295,16 +296,28 @@ def test_send_chunk_inserts_at_position(monkeypatch):
         monkeypatch.setattr(molly, "simulate_typing", no_typing)
         monkeypatch.setattr(molly, "schedule_next_message", no_schedule)
 
-        state = molly.ChatState(generator=iter(["abcdef"]))
-        state.next_prefix = "XYZ"
-        state.next_insert_position = 0.5
+        def fake_metrics(line: str):
+            if line == "P":
+                return 0.0, 0.0, 1.0
+            if line == "Q":
+                return 0.0, 0.0, 10.0
+            return 0.0, 0.0, 0.0
+
+        monkeypatch.setattr(molly, "compute_metrics", fake_metrics)
+
+        state = molly.ChatState(generator=iter(["abcdefghij"]))
+        state.next_prefixes = [("P", 1.0), ("Q", 1.0)]
 
         bot = DummyBot()
         app = DummyApp(bot)
 
         await molly.send_chunk(app, 1, state)
 
-        assert bot.sent == ["abc XYZ def"]
+        sent = bot.sent[0]
+        pos_p = sent.index("P")
+        pos_q = sent.index("Q")
+        center = len(sent) / 2
+        assert abs(pos_q - center) < abs(pos_p - center)
 
     asyncio.run(runner())
 
@@ -402,7 +415,7 @@ def test_send_chunk_resonance_modulates_prefix_probability(monkeypatch):
         molly._resonance_samples = 1
         state = molly.ChatState(generator=iter(["abcdef"]))
         await molly.send_chunk(app, 1, state)
-        assert bot.sent[-1] == "a hi bcdef"
+        assert bot.sent[-1] == "abc hi def"
         assert molly.avg_user_resonance == pytest.approx(1.0)
 
     asyncio.run(runner())
@@ -484,12 +497,9 @@ def test_handle_message_stores_all_fragments(tmp_path, monkeypatch):
     asyncio.run(runner())
 
 
-def test_handle_message_sets_insert_position(monkeypatch):
+def test_handle_message_stores_prefixes(monkeypatch):
     async def runner():
         monkeypatch.setattr(molly, "schedule_next_message", lambda *_, **__: None)
-        monkeypatch.setattr(molly.random, "choice", lambda seq: seq[0])
-        monkeypatch.setattr(molly.random, "choices", lambda seq, weights, k=1: [seq[0]])
-        monkeypatch.setattr(molly.random, "random", lambda: 0.3)
 
         class DummyMessage:
             def __init__(self, text: str) -> None:
@@ -510,8 +520,7 @@ def test_handle_message_sets_insert_position(monkeypatch):
         await molly.handle_message(update, context)
 
         state = molly.chat_states[1]
-        assert state.next_prefix == "Hello"
-        assert state.next_insert_position == 0.3
+        assert state.next_prefixes and state.next_prefixes[0][0] == "Hello"
 
         molly.chat_states.clear()
 
