@@ -48,7 +48,11 @@ def get_max_user_lines() -> int | None:
     except (TypeError, ValueError):  # pragma: no cover - invalid values treated as no limit
         return None
 CHANGELOG_DB = 'penelopa.db'
-THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
+_threshold = os.getenv("FINE_TUNE_THRESHOLD")
+try:
+    THRESHOLD_BYTES = int(_threshold) if _threshold else 100 * 1024
+except ValueError:  # pragma: no cover - invalid values treated as default
+    THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
 MAX_MESSAGE_LENGTH = 4096
 
 # Global connection to be shared across coroutines
