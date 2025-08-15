@@ -257,7 +257,16 @@ def compute_delay(state: ChatState, entropy: float, perplexity: float) -> float:
 
 
 async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
-    chunk = next(state.generator)
+    try:
+        chunk = next(state.generator)
+    except StopIteration:
+        logging.info("Generator exhausted for chat %s; restarting", chat_id)
+        gen_name = getattr(state.generator, "gi_code", None)
+        gen_name = gen_name.co_name if gen_name else ""
+        state.generator = (
+            random_chunks() if gen_name == "random_chunks" else text_chunks()
+        )
+        chunk = next(state.generator)
     prefix = None
     if state.next_prefix:
         prefix = state.next_prefix
