@@ -120,6 +120,47 @@ async def load_user_lines(max_lines: int | None = None) -> tuple[list[str], list
     return lines, weights
 
 
+async def sync_logged_lines() -> None:
+    """Backfill lines present in the log file but missing from the database."""
+    if db_conn is None or not LINES_FILE.exists():
+        return
+    try:
+        with LINES_FILE.open("r", encoding="utf-8") as f:
+            logged = [line.rstrip("\n") for line in f if line.strip()]
+    except Exception:
+        logging.exception("Failed to read lines log")
+        return
+    async with lines_lock:
+        missing = logged[len(user_lines):]
+    if not missing:
+        return
+    metrics = [compute_metrics(line) for line in missing]
+    try:
+        async with db_lock:
+            for line, (entropy, perplexity, resonance) in zip(missing, metrics):
+                await db_conn.execute(
+                    '''
+                    INSERT INTO lines (
+                        line, entropy, perplexity, resonance, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        line,
+                        entropy,
+                        perplexity,
+                        resonance,
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+            await db_conn.commit()
+    except Exception:
+        logging.exception("Failed to backfill lines database")
+    async with lines_lock:
+        for line, (_, perplexity, resonance) in zip(missing, metrics):
+            user_lines.append(line)
+            user_weights.append(perplexity + resonance)
+
+
 async def init_db() -> None:
     """Ensure the SQLite database exists and initialize global connection."""
     global db_conn
@@ -517,6 +558,8 @@ async def startup(app: Application) -> None:
     await init_db()
     global user_lines, user_weights
     user_lines, user_weights = await load_user_lines()
+    await sync_logged_lines()
+    await asyncio.to_thread(monitor_repo_once)
     background_tasks.append(asyncio.create_task(cleanup_chat_states()))
     background_tasks.append(asyncio.create_task(monitor_repo()))
 
