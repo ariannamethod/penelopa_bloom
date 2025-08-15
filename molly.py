@@ -358,8 +358,8 @@ async def _delayed_message(app: Application, chat_id: int, state: ChatState, del
         await send_chunk(app, chat_id, state)
     except asyncio.CancelledError:
         pass
-    except Exception:
-        logging.exception("Error in delayed message")
+    except Exception as exc:
+        logging.error("Error in delayed message: %s", exc)
         schedule_next_message(app, chat_id, state)
 
 
