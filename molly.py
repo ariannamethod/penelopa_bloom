@@ -313,12 +313,24 @@ CLEANUP_INTERVAL = 60
 STALE_AFTER = 3600
 
 
-def compute_delay(state: ChatState, entropy: float, perplexity: float) -> float:
+def compute_delay(
+    state: ChatState,
+    entropy: float,
+    perplexity: float,
+    resonance: float,
+) -> float:
     target = max(1, state.daily_target)
     base_interval = 86400 / target
     entropy_factor = 1 + (10 - min(entropy, 10)) / 10
     perplexity_factor = 1 + 1 / (perplexity + 1)
-    return base_interval * entropy_factor * perplexity_factor * random.uniform(0.5, 1.5)
+    resonance_factor = 1 + (5 - min(resonance, 5)) / 5
+    return (
+        base_interval
+        * entropy_factor
+        * perplexity_factor
+        * resonance_factor
+        * random.uniform(0.5, 1.5)
+    )
 
 
 def adjust_daily_target(state: ChatState, entropy: float, perplexity: float) -> None:
@@ -362,7 +374,7 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
                 chunk = chunk[:available]
         if prefix:
             chunk = f"{prefix} {chunk}"
-        entropy, perplexity, _ = compute_metrics(chunk)
+        entropy, perplexity, resonance = compute_metrics(chunk)
         delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
         await simulate_typing(app.bot, chat_id, delay)
         state.awaiting_response = False
@@ -382,10 +394,19 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
             adjust_daily_target(state, entropy, perplexity)
             state.messages_today += 1
             if state.messages_today >= state.daily_target:
-                tomorrow = datetime.combine((now + timedelta(days=1)).date(), time.min, tzinfo=UTC)
+                tomorrow = datetime.combine(
+                    (now + timedelta(days=1)).date(),
+                    time.min,
+                    tzinfo=UTC,
+                )
                 state.next_delay = (tomorrow - now).total_seconds()
             else:
-                state.next_delay = compute_delay(state, entropy, perplexity)
+                state.next_delay = compute_delay(
+                    state,
+                    entropy,
+                    perplexity,
+                    resonance,
+                )
             schedule_next_message(app, chat_id, state)
     except Exception:
         logging.exception("Failed to send chunk")
