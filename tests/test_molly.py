@@ -88,9 +88,11 @@ def test_trim_user_lines(tmp_path, monkeypatch):
         molly.user_lines[:] = ["a", "b", "c"]
         molly.user_weights[:] = [1.0, 2.0, 3.0]
         await molly.trim_user_lines(max_lines=2)
+        archive_file = lines_file.with_name("lines.archive.txt")
         assert molly.user_lines == ["b", "c"]
         assert molly.user_weights == [2.0, 3.0]
         assert lines_file.read_text(encoding="utf-8") == "b\nc\n"
+        assert archive_file.read_text(encoding="utf-8") == "a\n"
 
     asyncio.run(runner())
 
@@ -102,11 +104,27 @@ def test_trim_user_lines_no_limit(tmp_path, monkeypatch):
         monkeypatch.setattr(molly, "LINES_FILE", lines_file)
         molly.user_lines[:] = ["a", "b", "c"]
         molly.user_weights[:] = [1.0, 2.0, 3.0]
-        monkeypatch.setattr(molly, "MAX_USER_LINES", None)
         await molly.trim_user_lines()
         assert molly.user_lines == ["a", "b", "c"]
         assert molly.user_weights == [1.0, 2.0, 3.0]
         assert lines_file.read_text(encoding="utf-8") == "a\nb\nc\n"
+
+    asyncio.run(runner())
+
+
+def test_trim_user_lines_archives(tmp_path, monkeypatch):
+    async def runner():
+        lines_file = tmp_path / "lines.txt"
+        content = "\n".join(str(i) for i in range(100)) + "\n"
+        lines_file.write_text(content, encoding="utf-8")
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        molly.user_lines[:] = [str(i) for i in range(100)]
+        molly.user_weights[:] = [float(i) for i in range(100)]
+        await molly.trim_user_lines(max_lines=10)
+        archive_file = lines_file.with_name("lines.archive.txt")
+        assert molly.user_lines == [str(i) for i in range(90, 100)]
+        assert archive_file.read_text(encoding="utf-8").splitlines() == [str(i) for i in range(90)]
+        assert lines_file.read_text(encoding="utf-8").splitlines() == [str(i) for i in range(90, 100)]
 
     asyncio.run(runner())
 
@@ -125,6 +143,28 @@ def test_concurrent_store_line(tmp_path, monkeypatch):
         assert len(molly.user_lines) == 5
         assert set(molly.user_lines) == {f"line {i}" for i in range(5)}
         assert len(molly.user_weights) == 5
+        await molly.db_conn.close()
+        molly.db_conn = None
+
+    asyncio.run(runner())
+
+
+def test_load_user_lines_large(tmp_path, monkeypatch):
+    async def runner():
+        db_path = tmp_path / "lines.db"
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        molly.db_conn = None
+        await molly.init_db()
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.executemany(
+                "INSERT INTO lines(line, perplexity, resonance) VALUES (?, ?, ?)",
+                [(f"line {i}", 0.0, 0.0) for i in range(2000)],
+            )
+            await conn.commit()
+        lines, weights = await molly.load_user_lines(max_lines=50)
+        assert len(lines) == 50
+        assert lines[0] == "line 1950"
+        assert all(w == 0.0 for w in weights)
         await molly.db_conn.close()
         molly.db_conn = None
 

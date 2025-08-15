@@ -38,11 +38,15 @@ load_dotenv()
 ORIGIN_TEXT = Path('origin/molly.md')
 LINES_FILE = Path('origin/logs/lines.txt')
 DB_PATH = Path('origin/logs/lines.db')
-_max_lines = os.getenv("MAX_USER_LINES")
-try:
-    MAX_USER_LINES = int(_max_lines) if _max_lines else None
-except ValueError:  # pragma: no cover - invalid values treated as no limit
-    MAX_USER_LINES = None
+
+
+def get_max_user_lines() -> int | None:
+    """Return the configured maximum number of user lines."""
+    _max_lines = os.getenv("MAX_USER_LINES")
+    try:
+        return int(_max_lines) if _max_lines else None
+    except (TypeError, ValueError):  # pragma: no cover - invalid values treated as no limit
+        return None
 CHANGELOG_DB = 'penelopa.db'
 THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
 MAX_MESSAGE_LENGTH = 4096
@@ -60,24 +64,32 @@ user_weights: list[float] = []
 background_tasks: list[asyncio.Task] = []
 
 
-async def load_user_lines() -> tuple[list[str], list[float]]:
+async def load_user_lines(max_lines: int | None = None) -> tuple[list[str], list[float]]:
     """Return previously stored user lines and weights."""
+    if max_lines is None:
+        max_lines = get_max_user_lines()
     if not DB_PATH.exists():
         return [], []
+    lines: list[str] = []
+    weights: list[float] = []
     try:
         async with aiosqlite.connect(DB_PATH) as conn:
             cursor = await conn.execute(
                 'SELECT line, perplexity, resonance FROM lines ORDER BY id'
             )
-            rows = await cursor.fetchall()
+            while True:
+                rows = await cursor.fetchmany(1000)
+                if not rows:
+                    break
+                for line, perp, res in rows:
+                    lines.append(line)
+                    weights.append((perp or 0.0) + (res or 0.0))
+                if max_lines is not None and len(lines) > max_lines:
+                    lines = lines[-max_lines:]
+                    weights = weights[-max_lines:]
     except Exception:
         logging.exception("Failed to load user lines")
         return [], []
-    lines = [r[0] for r in rows]
-    weights = [(r[1] or 0.0) + (r[2] or 0.0) for r in rows]
-    if MAX_USER_LINES is not None and len(lines) > MAX_USER_LINES:
-        lines = lines[-MAX_USER_LINES:]
-        weights = weights[-MAX_USER_LINES:]
     return lines, weights
 
 
@@ -104,6 +116,9 @@ async def init_db() -> None:
         for col in ('entropy', 'perplexity', 'resonance'):
             if col not in cols:
                 await db_conn.execute(f'ALTER TABLE lines ADD COLUMN {col} REAL')
+        await db_conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_lines_created_at ON lines (created_at)'
+        )
         await db_conn.commit()
     except Exception:
         logging.exception("Failed to initialize lines database")
@@ -192,22 +207,27 @@ async def store_line(line: str) -> float:
 
 
 async def trim_user_lines(max_lines: int | None = None) -> None:
-    """Trim user_lines, weights, and log file to the last ``max_lines`` entries."""
+    """Trim in-memory and on-disk user lines, archiving removed entries."""
     if max_lines is None:
-        max_lines = MAX_USER_LINES
+        max_lines = get_max_user_lines()
     if max_lines is None:
         return
+    archive_file = LINES_FILE.with_name(f"{LINES_FILE.stem}.archive{LINES_FILE.suffix}")
     async with lines_lock:
         if len(user_lines) <= max_lines:
             return
         del user_lines[:-max_lines]
         del user_weights[:-max_lines]
     with LINES_FILE.open("r+", encoding="utf-8") as f:
-        f.seek(0)
         lines = f.readlines()
+        old_lines = lines[:-max_lines]
         f.seek(0)
         f.writelines(lines[-max_lines:])
         f.truncate()
+    if old_lines:
+        archive_file.parent.mkdir(parents=True, exist_ok=True)
+        with archive_file.open("a", encoding="utf-8") as af:
+            af.writelines(old_lines)
 
 
 def text_chunks() -> Iterator[str]:
@@ -517,8 +537,9 @@ async def handle_message(
     selected = select_prefix_fragments(fragments)
     for frag in fragments:
         await store_line(frag)
-    if MAX_USER_LINES is not None and len(user_lines) > MAX_USER_LINES:
-        await trim_user_lines()
+    max_lines = get_max_user_lines()
+    if max_lines is not None and len(user_lines) > max_lines:
+        await trim_user_lines(max_lines)
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
     if selected:
