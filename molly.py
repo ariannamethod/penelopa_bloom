@@ -218,8 +218,8 @@ async def store_line(line: str) -> float:
     return await _store_line(line)
 
 
-async def trim_user_lines(max_lines: int | None = None) -> None:
-    """Trim in-memory and on-disk user lines, archiving removed entries."""
+async def archive_user_lines(max_lines: int | None = None) -> None:
+    """Archive excess user lines to a separate file without permanent deletion."""
     if max_lines is None:
         max_lines = get_max_user_lines()
     if max_lines is None:
@@ -578,7 +578,8 @@ async def handle_message(
         await store_line(frag)
     max_lines = get_max_user_lines()
     if max_lines is not None and len(user_lines) > max_lines:
-        await trim_user_lines(max_lines)
+        # Archive old lines without dropping them permanently
+        await archive_user_lines(max_lines)
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
     if selected:

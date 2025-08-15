@@ -49,7 +49,7 @@ These patterns accumulate in a memory that steadily reshapes Molly's voice.
 
 Technically, the system uses Python with asynchronous Telegram handlers to sustain an unbroken monologue.
 
-User lines are stored in a SQLite database, annotated with entropy, perplexity, and a resonance score.
+User lines are stored in a SQLite database, annotated with entropy, perplexity, and a resonance score. When the number of lines grows beyond the `MAX_USER_LINES` limit (default 1000), older entries are archived to `origin/logs/lines.archive.txt` rather than being deleted.
 
 During generation, Molly selects prefixes from this database, weighted by the evolving metrics.
 
