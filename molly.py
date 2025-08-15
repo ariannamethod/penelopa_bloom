@@ -146,7 +146,8 @@ async def store_line(line: str) -> float:
     entropy, perplexity, resonance = compute_metrics(line)
     try:
         async with db_lock:
-            db_conn.execute(
+            await asyncio.to_thread(
+                db_conn.execute,
                 '''
                 INSERT INTO lines (
                     line, entropy, perplexity, resonance, created_at
@@ -160,13 +161,18 @@ async def store_line(line: str) -> float:
                     datetime.now(UTC).isoformat(),
                 ),
             )
-            db_conn.commit()
+            await asyncio.to_thread(db_conn.commit)
     except Exception:
         logging.exception("Failed to store line")
         return 0.0
-    LINES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with LINES_FILE.open('a', encoding='utf-8') as f:
-        f.write(line + '\n')
+
+    def _append_line(text: str) -> None:
+        LINES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with LINES_FILE.open('a', encoding='utf-8') as f:
+            f.write(text + '\n')
+
+    await asyncio.to_thread(_append_line, line)
+
     weight = perplexity + resonance
     user_lines.append(line)
     user_weights.append(weight)
