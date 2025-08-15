@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import shutil
 import configparser
+from collections import deque
 
 from telegram import Update
 from telegram.constants import ChatAction
@@ -326,8 +327,7 @@ async def simulate_typing(bot, chat_id: int, delay: int) -> None:
 @dataclass
 class ChatState:
     generator: Iterator[str] = field(default_factory=text_chunks)
-    next_prefix: str | None = None
-    next_insert_position: float | None = None
+    prefix_queue: deque[tuple[str, float]] = field(default_factory=deque)
     last_activity: datetime = field(
         default_factory=lambda: datetime.now(UTC)
     )
@@ -393,11 +393,14 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
                 random_chunks() if gen_name == "random_chunks" else text_chunks()
             )
             chunk = next(state.generator)
-        prefix = None
-        if state.next_prefix:
-            prefix = state.next_prefix
-            state.next_prefix = None
-        elif user_lines:
+        insertions: list[tuple[str, float]] = []
+        MAX_PREFIX_INSERTS = 2
+        initial_len = len(state.prefix_queue)
+        for _ in range(min(initial_len, MAX_PREFIX_INSERTS)):
+            prefix, pos = state.prefix_queue.popleft()
+            insertions.append((prefix, pos))
+            state.prefix_queue.append((prefix, random.random()))
+        if not insertions and user_lines:
             global avg_user_resonance, _resonance_samples
             if _resonance_samples == 0:
                 res_vals = [compute_metrics(line)[2] for line in user_lines]
@@ -411,6 +414,7 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
                     prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
                 else:
                     prefix = random.choice(user_lines)
+                insertions.append((prefix, random.random()))
                 _, _, res_val = compute_metrics(prefix)
                 logging.debug(
                     "Prefix resonance %.3f (avg %.3f)", res_val, avg_user_resonance
@@ -419,23 +423,22 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
                     avg_user_resonance * _resonance_samples + res_val
                 ) / (_resonance_samples + 1)
                 _resonance_samples += 1
-        available = MAX_MESSAGE_LENGTH - (len(prefix) + 2 if prefix else 0)
+        extra_len = sum(len(p) + 2 for p, _ in insertions)
+        available = MAX_MESSAGE_LENGTH - extra_len
         if len(chunk) > available:
             split_pos = chunk.rfind(" ", 0, available)
             if split_pos != -1:
                 chunk = chunk[:split_pos]
             else:
                 chunk = chunk[:available]
-        if prefix:
-            insert_ratio = (
-                state.next_insert_position
-                if state.next_insert_position is not None
-                else random.random()
-            )
-            insert_pos = int(insert_ratio * len(chunk))
-            parts = [chunk[:insert_pos].rstrip(), prefix, chunk[insert_pos:].lstrip()]
-            chunk = " ".join(part for part in parts if part)
-            state.next_insert_position = None
+        if insertions:
+            base = chunk
+            offset = 0
+            for prefix, ratio in sorted(insertions, key=lambda x: x[1]):
+                insert_pos = int(ratio * len(base)) + offset
+                parts = [chunk[:insert_pos].rstrip(), prefix, chunk[insert_pos:].lstrip()]
+                chunk = " ".join(part for part in parts if part)
+                offset += len(prefix) + 2
         entropy, perplexity, resonance = compute_metrics(chunk)
         delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
         await simulate_typing(app.bot, chat_id, delay)
@@ -443,6 +446,11 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
         try:
             await app.bot.send_message(chat_id=chat_id, text=chunk)
             await _store_line(chunk)
+            def _append_origin(text: str) -> None:
+                ORIGIN_TEXT.parent.mkdir(parents=True, exist_ok=True)
+                with ORIGIN_TEXT.open('a', encoding='utf-8') as f:
+                    f.write(text + '\n')
+            await asyncio.to_thread(_append_origin, chunk)
         except Exception:
             logging.exception("Failed to send chunk")
         finally:
@@ -616,12 +624,8 @@ async def handle_message(
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
     if selected:
-        lines, weights = zip(*selected)
-        if sum(weights) > 0:
-            state.next_prefix = random.choices(lines, weights=weights, k=1)[0]
-        else:
-            state.next_prefix = random.choice(lines)
-        state.next_insert_position = random.random()
+        for line, _ in selected:
+            state.prefix_queue.append((line, random.random()))
     state.last_activity = datetime.now(UTC)
     state.awaiting_response = True
     schedule_next_message(
