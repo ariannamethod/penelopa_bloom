@@ -44,10 +44,22 @@ def test_compute_delay_respects_daily_target(monkeypatch):
     state = molly.ChatState()
     entropy = 5.0
     perplexity = 10.0
+    resonance = 2.0
     state.daily_target = 8
-    delay_low = molly.compute_delay(state, entropy, perplexity)
+    delay_low = molly.compute_delay(state, entropy, perplexity, resonance)
     state.daily_target = 10
-    delay_high = molly.compute_delay(state, entropy, perplexity)
+    delay_high = molly.compute_delay(state, entropy, perplexity, resonance)
+    assert delay_low > delay_high
+
+
+def test_compute_delay_respects_resonance(monkeypatch):
+    monkeypatch.setattr(molly.random, "uniform", lambda a, b: 1)
+    state = molly.ChatState()
+    entropy = 5.0
+    perplexity = 10.0
+    state.daily_target = 8
+    delay_low = molly.compute_delay(state, entropy, perplexity, 0)
+    delay_high = molly.compute_delay(state, entropy, perplexity, 10)
     assert delay_low > delay_high
 
 

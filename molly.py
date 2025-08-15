@@ -346,12 +346,26 @@ CLEANUP_INTERVAL = 60
 STALE_AFTER = 3600
 
 
-def compute_delay(state: ChatState, entropy: float, perplexity: float) -> float:
+def compute_delay(
+    state: ChatState, entropy: float, perplexity: float, resonance: float
+) -> float:
+    """Return delay until next message.
+
+    The delay grows with lower entropy, perplexity, and resonance, making Molly
+    respond faster when incoming lines are more surprising or emotive.
+    """
     target = max(1, state.daily_target)
     base_interval = 86400 / target
     entropy_factor = 1 + (10 - min(entropy, 10)) / 10
     perplexity_factor = 1 + 1 / (perplexity + 1)
-    return base_interval * entropy_factor * perplexity_factor * random.uniform(0.5, 1.5)
+    resonance_factor = 1 + 1 / (resonance + 1)
+    return (
+        base_interval
+        * entropy_factor
+        * perplexity_factor
+        * resonance_factor
+        * random.uniform(0.5, 1.5)
+    )
 
 
 def adjust_daily_target(state: ChatState, entropy: float, perplexity: float) -> None:
@@ -403,7 +417,7 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
             parts = [chunk[:insert_pos].rstrip(), prefix, chunk[insert_pos:].lstrip()]
             chunk = " ".join(part for part in parts if part)
             state.next_insert_position = None
-        entropy, perplexity, _ = compute_metrics(chunk)
+        entropy, perplexity, resonance = compute_metrics(chunk)
         delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
         await simulate_typing(app.bot, chat_id, delay)
         state.awaiting_response = False
@@ -426,7 +440,7 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
                 tomorrow = datetime.combine((now + timedelta(days=1)).date(), time.min, tzinfo=UTC)
                 state.next_delay = (tomorrow - now).total_seconds()
             else:
-                state.next_delay = compute_delay(state, entropy, perplexity)
+                state.next_delay = compute_delay(state, entropy, perplexity, resonance)
             schedule_next_message(app, chat_id, state)
     except Exception:
         logging.exception("Failed to send chunk")
