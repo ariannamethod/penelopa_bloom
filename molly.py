@@ -179,9 +179,9 @@ async def _store_line(line: str) -> float:
     return weight
 
 
-def store_line(line: str) -> float:
-    """Synchronous wrapper around _store_line for ease of use."""
-    return asyncio.run(_store_line(line))
+async def store_line(line: str) -> float:
+    """Asynchronously store a line and return its weight."""
+    return await _store_line(line)
 
 
 def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
@@ -280,6 +280,7 @@ async def simulate_typing(bot, chat_id: int, delay: int) -> None:
 class ChatState:
     generator: Iterator[str] = field(default_factory=text_chunks)
     next_prefix: str | None = None
+    pending_messages: list[str] = field(default_factory=list)
     last_activity: datetime = field(
         default_factory=lambda: datetime.now(UTC)
     )
@@ -307,41 +308,64 @@ def compute_delay(state: ChatState, entropy: float, perplexity: float) -> float:
 
 async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
     try:
-        try:
-            chunk = next(state.generator)
-        except StopIteration:
-            logging.info("Generator exhausted for chat %s; restarting", chat_id)
-            gen_name = getattr(state.generator, "gi_code", None)
-            gen_name = gen_name.co_name if gen_name else ""
-            state.generator = (
-                random_chunks() if gen_name == "random_chunks" else text_chunks()
-            )
-            chunk = next(state.generator)
-        prefix = None
-        if state.next_prefix:
-            prefix = state.next_prefix
-            state.next_prefix = None
-        elif user_lines and random.random() < 0.5:
-            prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
-        if prefix:
-            chunk = f"{prefix} {chunk}"
-        entropy, perplexity, _ = compute_metrics(chunk)
-        await _store_line(chunk)
+        entropy = perplexity = 0.0
+        if state.pending_messages:
+            chunk = state.pending_messages.pop(0)
+        else:
+            try:
+                chunk = next(state.generator)
+            except StopIteration:
+                logging.info("Generator exhausted for chat %s; restarting", chat_id)
+                gen_name = getattr(state.generator, "gi_code", None)
+                gen_name = gen_name.co_name if gen_name else ""
+                state.generator = (
+                    random_chunks() if gen_name == "random_chunks" else text_chunks()
+                )
+                chunk = next(state.generator)
+            prefix = None
+            if state.next_prefix:
+                prefix = state.next_prefix
+                state.next_prefix = None
+            elif user_lines and random.random() < 0.5:
+                prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
+            if prefix:
+                chunk = f"{prefix} {chunk}"
+            entropy, perplexity, _ = compute_metrics(chunk)
+            await _store_line(chunk)
+            if len(chunk) > MAX_MESSAGE_LENGTH:
+                parts = [
+                    chunk[i : i + MAX_MESSAGE_LENGTH]
+                    for i in range(0, len(chunk), MAX_MESSAGE_LENGTH)
+                ]
+                chunk = parts[0]
+                state.pending_messages[:0] = parts[1:]
+
         delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
         await simulate_typing(app.bot, chat_id, delay)
         state.awaiting_response = False
-        await app.bot.send_message(chat_id=chat_id, text=chunk)
+        try:
+            await app.bot.send_message(chat_id=chat_id, text=chunk)
+        except Exception:
+            logging.exception("Failed to send chunk to chat %s", chat_id)
+            state.pending_messages.insert(0, chunk)
+            state.next_delay = 60
+            return
         now = datetime.now(UTC)
         if state.last_reset.date() != now.date():
             state.last_reset = now
             state.messages_today = 0
             state.daily_target = random.randint(4, 7)
-        state.messages_today += 1
-        if state.messages_today >= state.daily_target:
-            tomorrow = datetime.combine((now + timedelta(days=1)).date(), time.min, tzinfo=UTC)
-            state.next_delay = (tomorrow - now).total_seconds()
+        if state.pending_messages:
+            state.next_delay = 1
         else:
-            state.next_delay = compute_delay(state, entropy, perplexity)
+            state.messages_today += 1
+            if state.messages_today >= state.daily_target:
+                tomorrow = datetime.combine(
+                    (now + timedelta(days=1)).date(), time.min, tzinfo=UTC
+                )
+                state.next_delay = (tomorrow - now).total_seconds()
+            else:
+                state.next_delay = compute_delay(state, entropy, perplexity)
     except Exception:
         logging.exception("Failed to send chunk")
     finally:
