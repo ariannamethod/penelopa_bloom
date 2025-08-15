@@ -116,6 +116,52 @@ def test_send_chunk_respects_limit(monkeypatch):
     asyncio.run(runner())
 
 
+def test_send_chunk_does_not_store_unsent(tmp_path, monkeypatch):
+    class FailingBot:
+        async def send_message(self, chat_id: int, text: str) -> None:
+            raise RuntimeError("boom")
+
+        async def send_chat_action(self, chat_id: int, action: object) -> None:  # pragma: no cover
+            pass
+
+    class DummyApp:
+        def __init__(self, bot: FailingBot) -> None:
+            self.bot = bot
+
+    async def runner():
+        db_path = tmp_path / "lines.db"
+        lines_file = tmp_path / "lines.txt"
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        molly.user_lines.clear()
+        molly.user_weights.clear()
+        molly.db_conn = None
+        await molly.init_db()
+
+        async def no_typing(*args, **kwargs) -> None:
+            return None
+
+        def no_schedule(*args, **kwargs) -> None:
+            return None
+
+        monkeypatch.setattr(molly, "simulate_typing", no_typing)
+        monkeypatch.setattr(molly, "schedule_next_message", no_schedule)
+
+        state = molly.ChatState(generator=iter(["hello"]))
+        bot = FailingBot()
+        app = DummyApp(bot)
+
+        await molly.send_chunk(app, 1, state)
+
+        assert not lines_file.exists()
+        assert molly.user_lines == []
+
+        await molly.db_conn.close()
+        molly.db_conn = None
+
+    asyncio.run(runner())
+
+
 def test_handle_message_stores_all_fragments(tmp_path, monkeypatch):
     async def runner():
         db_path = tmp_path / "lines.db"
