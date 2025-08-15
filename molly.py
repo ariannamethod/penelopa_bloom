@@ -179,9 +179,9 @@ async def _store_line(line: str) -> float:
     return weight
 
 
-def store_line(line: str) -> float:
-    """Synchronous wrapper around _store_line for ease of use."""
-    return asyncio.run(_store_line(line))
+async def store_line(line: str) -> float:
+    """Asynchronous wrapper around _store_line."""
+    return await _store_line(line)
 
 
 def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
@@ -330,21 +330,25 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
         delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
         await simulate_typing(app.bot, chat_id, delay)
         state.awaiting_response = False
-        await app.bot.send_message(chat_id=chat_id, text=chunk)
-        now = datetime.now(UTC)
-        if state.last_reset.date() != now.date():
-            state.last_reset = now
-            state.messages_today = 0
-            state.daily_target = random.randint(4, 7)
-        state.messages_today += 1
-        if state.messages_today >= state.daily_target:
-            tomorrow = datetime.combine((now + timedelta(days=1)).date(), time.min, tzinfo=UTC)
-            state.next_delay = (tomorrow - now).total_seconds()
-        else:
-            state.next_delay = compute_delay(state, entropy, perplexity)
+        try:
+            await app.bot.send_message(chat_id=chat_id, text=chunk)
+        except Exception:
+            logging.exception("Failed to send chunk")
+        finally:
+            now = datetime.now(UTC)
+            if state.last_reset.date() != now.date():
+                state.last_reset = now
+                state.messages_today = 0
+                state.daily_target = random.randint(4, 7)
+            state.messages_today += 1
+            if state.messages_today >= state.daily_target:
+                tomorrow = datetime.combine((now + timedelta(days=1)).date(), time.min, tzinfo=UTC)
+                state.next_delay = (tomorrow - now).total_seconds()
+            else:
+                state.next_delay = compute_delay(state, entropy, perplexity)
+            schedule_next_message(app, chat_id, state)
     except Exception:
         logging.exception("Failed to send chunk")
-    finally:
         schedule_next_message(app, chat_id, state)
 
 

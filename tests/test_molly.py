@@ -3,8 +3,6 @@ from pathlib import Path
 import math
 import sqlite3
 import asyncio
-
-import asyncio
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
