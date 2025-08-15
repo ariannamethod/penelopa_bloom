@@ -20,10 +20,13 @@ def test_compute_metrics():
     assert resonance == 2
 
 
-def test_prepare_lines(monkeypatch):
+def test_split_and_select(monkeypatch):
     monkeypatch.setattr(molly.random, "randint", lambda a, b: 2)
     text = "Good day! Bad night? 123 456 789."
-    lines = molly.prepare_lines(text)
+    fragments = molly.split_fragments(text)
+    assert fragments == ["Good day", "Bad night", "123 456 789"]
+    selected = molly.select_prefix_fragments(fragments)
+    lines = [line for line, _ in selected]
     assert lines == ["123 456 789", "Good day"]
 
 
@@ -109,5 +112,50 @@ def test_send_chunk_respects_limit(monkeypatch):
 
         assert len(bot.sent) == 1
         assert len(bot.sent[0]) <= molly.MAX_MESSAGE_LENGTH
+
+    asyncio.run(runner())
+
+
+def test_handle_message_stores_all_fragments(tmp_path, monkeypatch):
+    async def runner():
+        db_path = tmp_path / "lines.db"
+        lines_file = tmp_path / "lines.txt"
+        monkeypatch.setattr(molly, "DB_PATH", db_path)
+        monkeypatch.setattr(molly, "LINES_FILE", lines_file)
+        molly.user_lines.clear()
+        molly.user_weights.clear()
+        molly.db_conn = None
+        await molly.init_db()
+
+        monkeypatch.setattr(molly, "schedule_next_message", lambda *_, **__: None)
+        monkeypatch.setattr(molly.random, "choice", lambda seq: seq[0])
+        monkeypatch.setattr(molly.random, "choices", lambda seq, weights, k=1: [seq[0]])
+
+        class DummyMessage:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        class DummyUpdate:
+            def __init__(self, text: str) -> None:
+                self.message = DummyMessage(text)
+                self.effective_chat = type("chat", (), {"id": 1})
+
+        class DummyContext:
+            def __init__(self) -> None:
+                self.application = None
+
+        update = DummyUpdate("One. Two three! Four?")
+        context = DummyContext()
+
+        await molly.handle_message(update, context)
+
+        async with aiosqlite.connect(db_path) as conn:
+            cursor = await conn.execute("SELECT line FROM lines")
+            rows = [row[0] for row in await cursor.fetchall()]
+            assert set(rows) == {"One", "Two three", "Four"}
+
+        await molly.db_conn.close()
+        molly.db_conn = None
+        molly.chat_states.clear()
 
     asyncio.run(runner())
