@@ -291,6 +291,7 @@ class ChatState:
 
 chat_states: dict[int, ChatState] = {}
 user_lines, user_weights = asyncio.run(load_user_lines())
+asyncio.set_event_loop(asyncio.new_event_loop())
 
 CLEANUP_INTERVAL = 60
 STALE_AFTER = 3600
