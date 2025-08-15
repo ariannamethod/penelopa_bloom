@@ -322,7 +322,11 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
             prefix = state.next_prefix
             state.next_prefix = None
         elif user_lines and random.random() < 0.5:
-            prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
+            total = sum(user_weights)
+            if total > 0:
+                prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
+            else:
+                prefix = random.choice(user_lines)
         if prefix:
             chunk = f"{prefix} {chunk}"
         entropy, perplexity, _ = compute_metrics(chunk)
@@ -440,7 +444,7 @@ async def handle_message(
         trim_user_lines()
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
-    if weights:
+    if weights and sum(weights) > 0:
         state.next_prefix = random.choices(lines, weights=weights, k=1)[0]
     else:
         state.next_prefix = random.choice(lines)
