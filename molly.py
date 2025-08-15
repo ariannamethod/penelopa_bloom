@@ -409,8 +409,8 @@ async def monologue(app: Application, chat_id: int) -> None:
     schedule_next_message(app, chat_id, state)
 
 
-def prepare_lines(text: str) -> list[str]:
-    """Split user text into emotionally charged fragments."""
+def split_fragments(text: str) -> list[str]:
+    """Return all meaningful fragments from user text."""
     raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
     fragments: list[str] = []
     for line in raw_lines:
@@ -427,36 +427,47 @@ def prepare_lines(text: str) -> list[str]:
                 frag = ' '.join(words[i:i + chunk]).strip()
                 if frag:
                     fragments.append(frag)
+    return fragments
+
+
+def select_prefix_fragments(fragments: list[str]) -> list[tuple[str, float]]:
+    """Pick the most resonant fragments to use as a prefix."""
     if not fragments:
         return []
     scored = [(line, compute_metrics(line)) for line in fragments]
     scored.sort(key=lambda x: x[1][1] + x[1][2], reverse=True)
     lines_count = 2 if len(scored) <= 2 else random.randint(2, 3)
-    selected = [line for line, _ in scored[:lines_count]]
-    return selected
+    return [
+        (line, metrics[1] + metrics[2]) for line, metrics in scored[:lines_count]
+    ]
 
 
 async def handle_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     text = update.message.text or ''
-    lines = prepare_lines(text)
-    if not lines:
+    fragments = split_fragments(text)
+    if not fragments:
         return
-    weights = []
-    for line in lines:
-        weights.append(await store_line(line))
+    logging.debug("fragments: %s", fragments)
+    selected = select_prefix_fragments(fragments)
+    for frag in fragments:
+        await store_line(frag)
     if len(user_lines) > MAX_USER_LINES:
         trim_user_lines()
     chat_id = update.effective_chat.id
     state = chat_states.setdefault(chat_id, ChatState())
-    if weights and sum(weights) > 0:
-        state.next_prefix = random.choices(lines, weights=weights, k=1)[0]
-    else:
-        state.next_prefix = random.choice(lines)
+    if selected:
+        lines, weights = zip(*selected)
+        if sum(weights) > 0:
+            state.next_prefix = random.choices(lines, weights=weights, k=1)[0]
+        else:
+            state.next_prefix = random.choice(lines)
     state.last_activity = datetime.now(UTC)
     state.awaiting_response = True
-    schedule_next_message(context.application, chat_id, state, delay=random.uniform(1, 2))
+    schedule_next_message(
+        context.application, chat_id, state, delay=random.uniform(1, 2)
+    )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
