@@ -12,6 +12,7 @@ $ torchrun --standalone --nproc_per_node=4 train.py
 import os
 import time
 import math
+import logging
 from contextlib import nullcontext
 
 import numpy as np
@@ -128,6 +129,8 @@ decay_lr = True # whether to decay the learning rate
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+# gradient clipping
+grad_clip = 1.0
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
@@ -149,6 +152,7 @@ else:
 
 if gpu_id == 0:
     os.makedirs(out_dir, exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 torch.manual_seed(1337 + gpu_id) # note: each worker gets a different seed
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
@@ -158,6 +162,24 @@ ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 data_dir = os.path.join('data', dataset)
+train_config = {
+    "dataset": dataset,
+    "batch_size": batch_size,
+    "block_size": block_size,
+    "n_layer": n_layer,
+    "n_head": n_head,
+    "n_embd": n_embd,
+    "dropout": dropout,
+    "learning_rate": learning_rate,
+    "weight_decay": weight_decay,
+    "betas": betas,
+    "warmup_iters": warmup_iters,
+    "lr_decay_iters": lr_decay_iters,
+    "min_lr": min_lr,
+    "grad_clip": grad_clip,
+}
+if gpu_id == 0:
+    logging.info("Training configuration: %s", train_config)
 
 
 class BinDataset(Dataset):
@@ -222,7 +244,7 @@ elif init_from == 'resume':
     checkpoint_model_args = checkpoint['model_args']
     for k, v in model_args.items():
         assert checkpoint_model_args[k] == v, "for now"
-        # TODO: think through how passed in params should interact with checkpoint params
+        # NOTE: interaction between passed params and checkpoint params requires design review (see issue #1)
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
     state_dict = checkpoint['model']
@@ -297,11 +319,7 @@ def get_lr(iter):
 if wandb_log and gpu_id == 0:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name)
-    wandb.config = {
-        "batch_size": batch_size,
-        "block_size": block_size,
-        "learning_rate": learning_rate, # TODO log everything else too
-    }
+    wandb.config.update(train_config)
 
 # training loop
 t0 = time.time()
@@ -347,14 +365,15 @@ while True:
 
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
-    # TODO: gradient clipping evaluate need for
+    if grad_clip is not None:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     optimizer.step()
 
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
     if iter_num % log_interval == 0 and gpu_id == 0:
-        lossf = loss.item() # loss as float. TODO CPU-GPU sync: profile, make sure not slow af
+        lossf = loss.item() # loss as float. NOTE: CPU-GPU sync; profile to ensure it's not a bottleneck (see issue #2)
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
     iter_num += 1
 
