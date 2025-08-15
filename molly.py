@@ -292,6 +292,7 @@ async def simulate_typing(bot, chat_id: int, delay: int) -> None:
 class ChatState:
     generator: Iterator[str] = field(default_factory=text_chunks)
     next_prefix: str | None = None
+    next_insert_position: float | None = None
     last_activity: datetime = field(
         default_factory=lambda: datetime.now(UTC)
     )
@@ -353,7 +354,7 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
                 prefix = random.choices(user_lines, weights=user_weights, k=1)[0]
             else:
                 prefix = random.choice(user_lines)
-        available = MAX_MESSAGE_LENGTH - (len(prefix) + 1 if prefix else 0)
+        available = MAX_MESSAGE_LENGTH - (len(prefix) + 2 if prefix else 0)
         if len(chunk) > available:
             split_pos = chunk.rfind(" ", 0, available)
             if split_pos != -1:
@@ -361,7 +362,15 @@ async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
             else:
                 chunk = chunk[:available]
         if prefix:
-            chunk = f"{prefix} {chunk}"
+            insert_ratio = (
+                state.next_insert_position
+                if state.next_insert_position is not None
+                else random.random()
+            )
+            insert_pos = int(insert_ratio * len(chunk))
+            parts = [chunk[:insert_pos].rstrip(), prefix, chunk[insert_pos:].lstrip()]
+            chunk = " ".join(part for part in parts if part)
+            state.next_insert_position = None
         entropy, perplexity, _ = compute_metrics(chunk)
         delay = random.randint(3, 6) if state.awaiting_response else random.randint(1, 3)
         await simulate_typing(app.bot, chat_id, delay)
@@ -527,6 +536,7 @@ async def handle_message(
             state.next_prefix = random.choices(lines, weights=weights, k=1)[0]
         else:
             state.next_prefix = random.choice(lines)
+        state.next_insert_position = random.random()
     state.last_activity = datetime.now(UTC)
     state.awaiting_response = True
     schedule_next_message(
