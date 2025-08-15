@@ -201,6 +201,18 @@ def text_chunks() -> Iterator[str]:
             yield remainder
 
 
+def random_chunks() -> Iterator[str]:
+    """Yield text chunks starting from a random position."""
+    chunks = list(text_chunks())
+    if not chunks:
+        return
+    start = random.randrange(len(chunks))
+    for chunk in chunks[start:]:
+        yield chunk
+    for chunk in chunks[:start]:
+        yield chunk
+
+
 async def simulate_typing(bot, chat_id: int, delay: int) -> None:
     """Show typing action for the specified delay."""
     elapsed = 0
@@ -350,11 +362,16 @@ async def handle_message(
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    if chat_id not in chat_states:
-        chat_states[chat_id] = ChatState()
-        asyncio.create_task(monologue(context.application, chat_id))
-    chat_states[chat_id].last_activity = datetime.now(UTC)
-    await update.message.reply_text('Molly starts whispering...')
+    state = chat_states.get(chat_id)
+    if state is None:
+        state = ChatState()
+        state.generator = random_chunks()
+        state.awaiting_response = True
+        state.last_activity = datetime.now(UTC)
+        chat_states[chat_id] = state
+        await send_chunk(context.application, chat_id, state)
+    else:
+        state.last_activity = datetime.now(UTC)
 
 
 def main() -> None:
