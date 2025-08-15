@@ -331,7 +331,7 @@ class ChatState:
     last_activity: datetime = field(
         default_factory=lambda: datetime.now(UTC)
     )
-    daily_target: int = field(default_factory=lambda: random.randint(8, 10))
+    daily_target: int = field(default_factory=lambda: random.randint(10, 12))
     messages_today: int = 0
     avg_entropy: float = 0.0
     avg_perplexity: float = 0.0
@@ -359,8 +359,8 @@ def compute_delay(
     """
     target = max(1, state.daily_target)
     base_interval = 86400 / target
-    entropy_factor = 1 + (10 - min(entropy, 10)) / 10
-    perplexity_factor = 1 + 1 / (perplexity + 1)
+    entropy_factor = 0.5 + (10 - min(entropy, 10)) / 10
+    perplexity_factor = 0.5 + 1 / (perplexity + 1)
     resonance_factor = 1 + 1 / (resonance + 1)
     return (
         base_interval
@@ -376,9 +376,9 @@ def adjust_daily_target(state: ChatState, entropy: float, perplexity: float) -> 
     state.avg_entropy = (state.avg_entropy * count + entropy) / (count + 1)
     state.avg_perplexity = (state.avg_perplexity * count + perplexity) / (count + 1)
     if state.avg_entropy < 5 and state.avg_perplexity < 30:
-        state.daily_target = min(10, state.daily_target + 1)
+        state.daily_target = min(12, state.daily_target + 1)
     elif state.avg_entropy > 7 or state.avg_perplexity > 100:
-        state.daily_target = max(8, state.daily_target - 1)
+        state.daily_target = max(10, state.daily_target - 1)
 
 
 async def send_chunk(app: Application, chat_id: int, state: ChatState) -> None:
