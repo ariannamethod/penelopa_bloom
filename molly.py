@@ -72,8 +72,18 @@ sentiment_analyzer = SentimentIntensityAnalyzer()
 _char_vocab = string.ascii_lowercase + string.digits + " ?"
 _char_to_idx = {c: i for i, c in enumerate(_char_vocab)}
 _vocab_size = len(_char_vocab)
-torch.manual_seed(0)
-_bigram_weights = torch.randn(_vocab_size, _vocab_size)
+
+
+@lru_cache(maxsize=1)
+def _get_bigram_log_probs() -> torch.Tensor:
+    text = ORIGIN_TEXT.read_text(encoding="utf-8").lower()
+    counts = torch.ones((_vocab_size, _vocab_size))
+    for a, b in zip(text, text[1:]):
+        i = _char_to_idx.get(a, _char_to_idx['?'])
+        j = _char_to_idx.get(b, _char_to_idx['?'])
+        counts[i, j] += 1
+    probs = counts / counts.sum(dim=1, keepdim=True)
+    return torch.log(probs)
 
 # Global connection to be shared across coroutines
 db_conn: aiosqlite.Connection | None = None
@@ -157,16 +167,14 @@ def compute_metrics(line: str) -> tuple[float, float, float]:
     if not tokens:
         return 0.0, 0.0, 0.0
 
+    log_probs = _get_bigram_log_probs()
     ids = [_char_to_idx.get(c, _char_to_idx['?']) for c in line.lower()]
     if len(ids) < 2:
-        loss = torch.tensor(0.0)
+        entropy = perplexity = 0.0
     else:
-        x = torch.tensor(ids[:-1])
-        y = torch.tensor(ids[1:])
-        logits = _bigram_weights[x]
-        loss = F.cross_entropy(logits, y)
-    entropy = loss.item() / math.log(2) - math.log2(_vocab_size)
-    perplexity = math.exp(loss.item()) / _vocab_size
+        pair_log_probs = log_probs[ids[:-1], ids[1:]]
+        entropy = (-pair_log_probs / math.log(2)).mean().item()
+        perplexity = 2 ** entropy
 
     scores = sentiment_analyzer.polarity_scores(line)
     emotion_score = scores["compound"]
@@ -545,6 +553,9 @@ def split_fragments(
     executed for every produced fragment to ensure metrics are calculated.
     """
 
+    entropy_threshold += math.log2(_vocab_size)
+    perplexity_threshold *= _vocab_size
+
     raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
     fragments: list[str] = []
 
@@ -591,7 +602,7 @@ def select_prefix_fragments(fragments: list[str]) -> list[tuple[str, float]]:
     if not fragments:
         return []
     scored = [(line, compute_metrics(line)) for line in fragments]
-    scored.sort(key=lambda x: x[1][1] + x[1][2], reverse=True)
+    scored.sort(key=lambda x: x[1][1] / (1 + x[1][2]), reverse=True)
     lines_count = 2 if len(scored) <= 2 else random.randint(2, 3)
     return [
         (line, metrics[1] + metrics[2]) for line, metrics in scored[:lines_count]
