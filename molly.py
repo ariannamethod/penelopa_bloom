@@ -906,8 +906,14 @@ def monitor_repo_once() -> None:
             else:
                 print('No repository changes detected.')
 
-            if total_logged_size(conn) > THRESHOLD_BYTES:
+            size = total_logged_size(conn)
+            if size > THRESHOLD_BYTES:
                 fine_tune()
+            logging.info(
+                "Changelog DB size: %d bytes, %d bytes remaining to threshold",
+                size,
+                max(0, THRESHOLD_BYTES - size),
+            )
     except Exception:
         logging.exception("Database operation failed")
 

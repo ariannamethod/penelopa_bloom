@@ -31,6 +31,14 @@ variables or from a `config.ini` file in the working directory:
 - `THRESHOLD_BYTES` – size in bytes of logged repository changes that triggers
   fine-tuning. Defaults to `102400` (100 KB).
 
+To override the default threshold, set the `THRESHOLD_BYTES` environment
+variable before starting the application. A value of `102400` (100 KB) is
+recommended:
+
+```bash
+export THRESHOLD_BYTES=102400
+```
+
 ### Technical TL;DR
 
 Penelope listens to every incoming message with a sensor that measures entropy and perplexity, turning language into quantitative signals.
