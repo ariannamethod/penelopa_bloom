@@ -39,6 +39,7 @@ MAX_USER_LINES = 1000
 CHANGELOG_DB = 'penelopa.db'
 THRESHOLD_BYTES = 100 * 1024  # 100 kilobytes
 MAX_MESSAGE_LENGTH = 4096
+READ_CHUNK_SIZE = 1024  # ~1 KB
 
 # Global connection to be shared across threads
 db_conn: sqlite3.Connection | None = None
@@ -179,18 +180,18 @@ def trim_user_lines(max_lines: int = MAX_USER_LINES) -> None:
 
 
 def text_chunks() -> Iterator[str]:
-    """Yield chunks up to Telegram's maximum size without splitting words."""
+    """Yield ~1 KB chunks from ORIGIN_TEXT without splitting words."""
     buffer = ""
     with ORIGIN_TEXT.open("r", encoding="utf-8") as f:
         while True:
-            data = f.read(MAX_MESSAGE_LENGTH - len(buffer))
+            data = f.read(READ_CHUNK_SIZE)
             if not data:
                 break
             buffer += data
-            while len(buffer) >= MAX_MESSAGE_LENGTH:
-                split_pos = buffer.rfind(" ", 0, MAX_MESSAGE_LENGTH)
+            while len(buffer) >= READ_CHUNK_SIZE:
+                split_pos = buffer.rfind(" ", 0, READ_CHUNK_SIZE)
                 if split_pos == -1:
-                    split_pos = buffer.find(" ", MAX_MESSAGE_LENGTH)
+                    split_pos = buffer.find(" ", READ_CHUNK_SIZE)
                     if split_pos == -1:
                         break
                 chunk, buffer = buffer[:split_pos], buffer[split_pos + 1:]
